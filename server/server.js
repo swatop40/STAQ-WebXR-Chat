@@ -6,7 +6,7 @@ import cors from "cors";
 const app = express();
 app.use(cors());
 
-const httpServer = http.createServer(app); // rename this to avoid conflict
+const httpServer = http.createServer(app); 
 
 const io = new Server(httpServer, {
   cors: {
@@ -14,16 +14,17 @@ const io = new Server(httpServer, {
   },
 });
 
-const PORT = 3000;
+const players = {};
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
+  socket.emit("playersUpdate", players);
+  socket.on("updatePosition", (pos) => {
+    players[socket.id] = pos;
+    io.emit("playersUpdate", players);
+  });
 
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
-  });
-});
-
-httpServer.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+    delete players[socket.id];
+    i

@@ -7,7 +7,7 @@ import "babylonjs-inspector";
 import {startScene} from './scenes/start.js';
 import {io} from "socket.io-client";
 
-const socket = io("http://localhost:3000");
+const socket = io("http://localhost:3000"); //placeholder
 
 socket.on("connect", () =>
 {
@@ -24,29 +24,17 @@ socket.on("playersUpdate", (players) =>
   console.log("Players Updated:", players);
 });
 
-const canvas = document.getElementById("renderCanvas");
-if (!canvas) throw new Error("Canvas #renderCanvas not found");
+const otherPlayers = {};
 
-const engine = new BABYLON.Engine(canvas, true);
+//Im not positive the code below this works, just through some research I think this should handle the basic positioning of players using camera position/broadcast
+socket.on("playersUpdate", (players) => {
+  for (const id in players) {
+    if (id === socket.id) continue; 
 
-async function main() {
-  // ---------------------------------------------------------------------------
-  // Scene
-  // ---------------------------------------------------------------------------
-  // Create the scene object. All cameras, lights and meshes belong to a scene.
-  const scene = await startScene(engine);
-  scene.debugLayer.show();
+    const pos = players[id];
 
-  // ---------------------------------------------------------------------------
-  // Render loop & resize handling
-  // ---------------------------------------------------------------------------
-  // The engine's render loop continuously calls scene.render() so the scene is
-  // redrawn each frame. This is required for animations and user interaction.
-  engine.runRenderLoop(() => {
-    scene.render();
-  });
-
-  window.addEventListener("resize", () => engine.resize());
-}
-
-  main();
+    if (!otherPlayers[id]) {
+      // Create a new mesh for this user
+      otherPlayers[id] = BABYLON.MeshBuilder.CreateBox(`player-${id}`, { size: 0.5 }, scene);
+      otherPlayers[id].material = new BABYLON.StandardMaterial(`mat-${id}`, scene);
+      otherPlayers[id].material.diffuseColor = new BABYLON.Color3(Math.ran
