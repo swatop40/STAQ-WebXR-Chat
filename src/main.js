@@ -5,11 +5,24 @@
 import * as BABYLON from 'babylonjs'
 import "babylonjs-inspector";
 import {startScene} from './scenes/start.js';
+import {io} from "socket.io-client";
 
+const socket = io("http://localhost:3000");
 
+socket.on("connect", () =>
+{
+  console.log("Connected to server with ID:", socket.id);
+});
 
+socket.on("disconnect", () =>
+{
+  console.log("Disonnected from server");
+});
 
-
+socket.on("playersUpdate", (players) =>
+{
+  console.log("Players Updated:", players);
+});
 
 const canvas = document.getElementById("renderCanvas");
 if (!canvas) throw new Error("Canvas #renderCanvas not found");
