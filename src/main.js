@@ -1,52 +1,132 @@
-// main.js — Basic Babylon.js scene setup with inspector toggle
-// Creates a minimal scene, camera, light and a box so the canvas shows
-// something immediately. Also enables the Babylon inspector which can be
-// toggled with the typed sequence "debug".
-import * as BABYLON from 'babylonjs'
+import * as BABYLON from "babylonjs";
 import "babylonjs-inspector";
-import {startScene} from './scenes/start.js';
-import {io} from "socket.io-client";
+import { io } from "socket.io-client";
 
-const socket = io("http://localhost:3000");
+import { startScene } from "./scenes/start.js";
 
-socket.on("connect", () =>
-{
-  console.log("Connected to server with ID:", socket.id);
+
+const socket = io({
+  transports: ["websocket", "polling"],
 });
 
-socket.on("disconnect", () =>
-{
-  console.log("Disonnected from server");
-});
-
-socket.on("playersUpdate", (players) =>
-{
-  console.log("Players Updated:", players);
-});
+socket.on("connect", () => console.log("[NET] Connected:", socket.id));
+socket.on("connect_error", (err) => console.error("[NET] connect_error:", err.message));
+socket.on("disconnect", () => console.log("[NET] Disconnected"));
 
 const canvas = document.getElementById("renderCanvas");
 if (!canvas) throw new Error("Canvas #renderCanvas not found");
 
 const engine = new BABYLON.Engine(canvas, true);
 
+let sceneRef = null;
+let selfId = null;
+
+const remoteMeshes = new Map();
+
+function ensureRemoteMesh(scene, id) {
+  let mesh = remoteMeshes.get(id);
+  if (mesh) return mesh;
+
+  mesh = BABYLON.MeshBuilder.CreateBox(`remote_${id}`, { size: 0.35 }, scene);
+  mesh.position.y = 1.6;
+
+  remoteMeshes.set(id, mesh);
+  return mesh;
+}
+
+function removeRemoteMesh(id) {
+  const mesh = remoteMeshes.get(id);
+  if (mesh) {
+    mesh.dispose();
+    remoteMeshes.delete(id);
+  }
+}
+
+function extractYaw(camera) {
+  if (camera.rotationQuaternion) {
+    const q = camera.rotationQuaternion;
+
+    return Math.atan2(
+      2 * (q.w * q.y + q.x * q.z),
+      1 - 2 * (q.y * q.y + q.x * q.x)
+    );
+  }
+
+  return camera.rotation?.y ?? 0;
+}
+
+
+socket.on("init", ({ selfId: id, players }) => {
+  selfId = id;
+  console.log("[NET] init selfId:", selfId);
+
+  if (!sceneRef) return;
+
+
+  Object.values(players || {}).forEach((p) => {
+    if (p?.id && p.id !== selfId) ensureRemoteMesh(sceneRef, p.id);
+  });
+});
+
+socket.on("playerJoined", (p) => {
+  if (!sceneRef || !p?.id || p.id === selfId) return;
+  console.log("[NET] playerJoined:", p.id);
+  ensureRemoteMesh(sceneRef, p.id);
+});
+
+socket.on("playerLeft", (id) => {
+  console.log("[NET] playerLeft:", id);
+  removeRemoteMesh(id);
+});
+
+socket.on("playersUpdate", (players) => {
+  if (!sceneRef || !players) return;
+
+  for (const [id, p] of Object.entries(players)) {
+    if (id === selfId) continue;
+
+    const mesh = ensureRemoteMesh(sceneRef, id);
+
+    if (p?.pos) {
+      mesh.position.set(p.pos.x, p.pos.y, p.pos.z);
+    }
+    if (typeof p?.rotY === "number") {
+      mesh.rotation.y = p.rotY;
+    }
+  }
+});
+
+
 async function main() {
-  // ---------------------------------------------------------------------------
-  // Scene
-  // ---------------------------------------------------------------------------
-  // Create the scene object. All cameras, lights and meshes belong to a scene.
   const scene = await startScene(engine);
+  sceneRef = scene;
+
+
   scene.debugLayer.show();
 
-  // ---------------------------------------------------------------------------
-  // Render loop & resize handling
-  // ---------------------------------------------------------------------------
-  // The engine's render loop continuously calls scene.render() so the scene is
-  // redrawn each frame. This is required for animations and user interaction.
+
+  const SEND_HZ = 15;
+  let lastSend = 0;
+
   engine.runRenderLoop(() => {
     scene.render();
+
+    if (!socket.connected || !scene.activeCamera) return;
+
+    const now = performance.now();
+    if (now - lastSend < 1000 / SEND_HZ) return;
+    lastSend = now;
+
+    const cam = scene.activeCamera;
+    const pos = cam.position;
+
+    socket.emit("pose", {
+      pos: { x: pos.x, y: pos.y, z: pos.z },
+      rotY: extractYaw(cam),
+    });
   });
 
   window.addEventListener("resize", () => engine.resize());
 }
 
-  main();
+main();
