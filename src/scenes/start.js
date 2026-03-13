@@ -33,7 +33,7 @@ export async function startScene(engine) {
   ground.position.y = -0.25;
 
   
-  const room = await SceneLoader.ImportMeshAsync(null, "/models/", "room.glb", scene);
+  const room = await SceneLoader.ImportMeshAsync(null, "/scene-models/", "room.glb", scene);
   console.log("Imported meshes:", room.meshes.map((m) => m.name));
 
   // Box affected by gravity + Falls
