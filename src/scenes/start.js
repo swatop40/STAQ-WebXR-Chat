@@ -9,9 +9,16 @@ import {
 } from "babylonjs";
 import "babylonjs-loaders";
 
+import * as CANNON from "cannon"; 
+import "babylonjs-loaders";
+
 export async function startScene(engine) {
   const scene = new Scene(engine);
 
+  scene.enablePhysics(
+  new BABYLON.Vector3(0, -9.81, 0), // gravity
+  new BABYLON.CannonJSPlugin(true, 10, CANNON) // plugin with imported CANNON
+);
   
   const cam = new FreeCamera("cam", new Vector3(0.25, 2, -8), scene);
   cam.rotation = new Vector3(0.19996493417004554, -6.291316540956004, 0);
@@ -29,7 +36,91 @@ export async function startScene(engine) {
   const room = await SceneLoader.ImportMeshAsync(null, "/models/", "room.glb", scene);
   console.log("Imported meshes:", room.meshes.map((m) => m.name));
 
-  
+  // Box affected by gravity + Falls
+box.physicsImpostor = new BABYLON.PhysicsImpostor(
+  box,
+  BABYLON.PhysicsImpostor.BoxImpostor, // shape of the physics body
+  { mass: 1, restitution: 0.2, friction: 0.5 }, // mass>0 so gravity affects it
+  scene
+);
+
+// Ground stays static
+ground.physicsImpostor = new BABYLON.PhysicsImpostor(
+  ground,
+  BABYLON.PhysicsImpostor.BoxImpostor,
+  { mass: 0, restitution: 0.2, friction: 0.8 }, // mass=0 → immovable
+  scene
+);
+
+const wallThickness = 0.2;
+const wallHeight = 2;
+const wallLength = 6;
+
+const walls = [];
+
+// Back wall
+walls.push(BABYLON.MeshBuilder.CreateBox("backWall", { width: wallLength, height: wallHeight, depth: wallThickness }, scene));
+walls[0].position.set(0, wallHeight / 2, wallLength / 2);
+walls[0].physicsImpostor = new BABYLON.PhysicsImpostor(
+  walls[0],
+  BABYLON.PhysicsImpostor.BoxImpostor,
+  { mass: 0, restitution: 0.2, friction: 0.8 },
+  scene
+);
+
+// Front wall
+walls.push(BABYLON.MeshBuilder.CreateBox("frontWall", { width: wallLength, height: wallHeight, depth: wallThickness }, scene));
+walls[1].position.set(0, wallHeight / 2, -wallLength / 2);
+walls[1].physicsImpostor = new BABYLON.PhysicsImpostor(
+  walls[1],
+  BABYLON.PhysicsImpostor.BoxImpostor,
+  { mass: 0, restitution: 0.2, friction: 0.8 },
+  scene
+);
+
+// Left wall
+walls.push(BABYLON.MeshBuilder.CreateBox("leftWall", { width: wallThickness, height: wallHeight, depth: wallLength }, scene));
+walls[2].position.set(-wallLength / 2, wallHeight / 2, 0);
+walls[2].physicsImpostor = new BABYLON.PhysicsImpostor(
+  walls[2],
+  BABYLON.PhysicsImpostor.BoxImpostor,
+  { mass: 0, restitution: 0.2, friction: 0.8 },
+  scene
+);
+
+// Right wall
+walls.push(BABYLON.MeshBuilder.CreateBox("rightWall", { width: wallThickness, height: wallHeight, depth: wallLength }, scene));
+walls[3].position.set(wallLength / 2, wallHeight / 2, 0);
+walls[3].physicsImpostor = new BABYLON.PhysicsImpostor(
+  walls[3],
+  BABYLON.PhysicsImpostor.BoxImpostor,
+  { mass: 0, restitution: 0.2, friction: 0.8 },
+  scene
+);
+
+
+const playerHeight = 1.8;
+const playerWidth = 0.6;
+
+// Create an invisible box as the player physics body
+//Coliders work Kinda, Colisions with walls stop but if are pushed causes extreme physics reactions, and the player/objects falls through the ground. I’m not sure if it’s a problem with the physics impostor setup or if there’s something else going on.
+const playerMesh = BABYLON.MeshBuilder.CreateBox("player", {
+    width: playerWidth,
+    height: playerHeight,
+    depth: playerWidth
+}, scene);
+
+playerMesh.isVisible = false; // hide the box
+playerMesh.position.copyFrom(cam.position); // start at camera position
+
+// Add physics impostor so gravity and collisions affect the player
+// Player Exists within the scene but for some reason imediately falls through the ground and walls. I’m not sure if it’s a problem with the physics impostor setup or if there’s something else going on.
+playerMesh.physicsImpostor = new BABYLON.PhysicsImpostor(
+    playerMesh,
+    BABYLON.PhysicsImpostor.BoxImpostor,
+    { mass: 1, restitution: 0, friction: 0.5 },
+    scene
+);
   const xr = await scene.createDefaultXRExperienceAsync({
     uiOptions: { sessionMode: "immersive-vr" },
   });
