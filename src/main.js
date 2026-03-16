@@ -7,6 +7,7 @@ import { startScene } from "./scenes/start.js";
 
 const socket = io({
   transports: ["websocket", "polling"],
+  autoConnect: false,
 });
 
 socket.on("connect", () => console.log("[NET] Connected:", socket.id));
@@ -22,36 +23,98 @@ let sceneRef = null;
 let selfId = null;
 
 const remoteMeshes = new Map();
+const pendingRemoteMeshes = new Map();
+
+let avatarTemplateRoot = null;
+let avatarTemplateMeshes = [];
 
 // Voice chat variables
 let localStream = null;
 const peerConnections = new Map();
 
-function ensureRemoteMesh(scene, id) {
-  let mesh = remoteMeshes.get(id);
-  if (mesh) return mesh;
+async function loadAvatarTemplate(scene) {
+  if (avatarTemplateRoot) return;
 
-  mesh = BABYLON.MeshBuilder.CreateBox(`remote_${id}`, { size: 0.35 }, scene);
-  mesh.position.y = 1.6;
+  const result = await BABYLON.SceneLoader.ImportMeshAsync(
+    null,
+    "/object-models/",
+    "default-avatar.glb",
+    scene
+  );
 
-  remoteMeshes.set(id, mesh);
-  return mesh;
+  avatarTemplateRoot = new BABYLON.TransformNode("avatarTemplateRoot", scene);
+
+  result.meshes.forEach((mesh) => {
+    if (mesh === avatarTemplateRoot) return;
+
+    if (mesh.parent == null) {
+      mesh.parent = avatarTemplateRoot;
+    }
+
+    mesh.setEnabled(false);
+  });
+
+  avatarTemplateRoot.setEnabled(false);
+  avatarTemplateMeshes = result.meshes;
+}
+
+async function ensureRemoteMesh(scene, id) {
+  const existing = remoteMeshes.get(id);
+  if (existing) return existing;
+
+  const pending = pendingRemoteMeshes.get(id);
+  if (pending) return await pending;
+
+  const creationPromise = (async () => {
+    await loadAvatarTemplate(scene);
+
+    const root = new BABYLON.TransformNode(`remote_${id}`, scene);
+
+    avatarTemplateMeshes.forEach((mesh) => {
+      if (!(mesh instanceof BABYLON.Mesh)) return;
+      if (mesh === avatarTemplateRoot) return;
+
+      const clone = mesh.clone(`${mesh.name}_${id}`);
+      if (!clone) return;
+
+      clone.setEnabled(true);
+      clone.parent = root;
+    });
+
+    root.scaling.set(.8, .8, .8);
+    root.position.y = 0;
+
+    remoteMeshes.set(id, root);
+    pendingRemoteMeshes.delete(id);
+    return root;
+  })();
+
+  pendingRemoteMeshes.set(id, creationPromise);
+  return await creationPromise;
 }
 
 function removeRemoteMesh(id) {
-  const mesh = remoteMeshes.get(id);
-  if (mesh) {
-    mesh.dispose();
+  pendingRemoteMeshes.delete(id);
+
+  const root = remoteMeshes.get(id);
+  if (root) {
+    root.dispose(false, true);
     remoteMeshes.delete(id);
   }
 }
 
 function removePeerConnection(id) {
   const pc = peerConnections.get(id);
-
   if (pc) {
-    pc.close();               
+    pc.close();
     peerConnections.delete(id);
+  }
+
+  const audio = remoteAudioEls.get(id);
+  if (audio) {
+    audio.srcObject = null;
+    audio.remove();
+    remoteAudioEls.delete(id);
   }
 }
 
@@ -68,39 +131,90 @@ function extractYaw(camera) {
   return camera.rotation?.y ?? 0;
 }
 
+const remoteAudioEls = new Map();
+
 function createPeerConnection(targetId) {
+  if (targetId === selfId) {
+    console.error("[VOICE] BLOCKED self peer connection attempt:", {
+      selfId,
+      targetId
+    });
+    return null;
+  }
+
+  const existing = peerConnections.get(targetId);
+  if (existing) return existing;
 
   const pc = new RTCPeerConnection({
-    iceServers: [
-      { urls: "stun:stun.l.google.com:19302" }
-    ]
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
   });
 
   if (localStream) {
-    localStream.getTracks().forEach(track => {
-      pc.addTrack(track, localStream);
+  const tracks = localStream.getTracks();
+  console.log(`[VOICE] Adding ${tracks.length} local tracks to PC for ${targetId}`);
+
+  tracks.forEach((track) => {
+    console.log("[VOICE] Adding track:", {
+      kind: track.kind,
+      enabled: track.enabled,
+      muted: track.muted,
+      readyState: track.readyState,
+      label: track.label
     });
-  }
+    pc.addTrack(track, localStream);
+  });
+} else {
+  console.warn("[VOICE] No localStream when creating PC for", targetId);
+}
 
   pc.onicecandidate = (event) => {
     if (event.candidate) {
       socket.emit("webrtc-ice-candidate", {
         targetId,
-        candidate: event.candidate
+        candidate: event.candidate,
       });
     }
   };
 
-  pc.ontrack = (event) => {
-    console.log("[VOICE] Receiving audio from:", targetId);
+pc.ontrack = async (event) => {
+  console.log("[VOICE] Receiving audio from:", targetId);
+  console.log("[VOICE] ontrack stream count:", event.streams.length);
+  console.log("[VOICE] ontrack kind:", event.track?.kind);
 
-    const audio = new Audio();
-    audio.srcObject = event.streams[0];
+  let audio = remoteAudioEls.get(targetId);
+  if (!audio) {
+    audio = document.createElement("audio");
     audio.autoplay = true;
+    audio.playsInline = true;
+    audio.controls = false;
+    audio.style.display = "none";
+    document.body.appendChild(audio);
+    remoteAudioEls.set(targetId, audio);
+  }
+
+  audio.srcObject = event.streams[0];
+
+  try {
+    await audio.play();
+    console.log("[VOICE] Playback started for:", targetId);
+  } catch (err) {
+    console.error("[VOICE] audio.play() failed for:", targetId, err);
+  }
+};
+
+  pc.onconnectionstatechange = () => {
+    console.log(`[VOICE] ${targetId} state:`, pc.connectionState);
+
+    if (
+      pc.connectionState === "failed" ||
+      pc.connectionState === "closed" ||
+      pc.connectionState === "disconnected"
+    ) {
+      removePeerConnection(targetId);
+    }
   };
 
   peerConnections.set(targetId, pc);
-
   return pc;
 }
 
@@ -114,43 +228,29 @@ socket.on("init", async ({ selfId: id, players }) => {
     (p) => p?.id && p.id !== selfId
   );
 
-  otherPlayers.forEach((p) => {
-    ensureRemoteMesh(sceneRef, p.id);
-  });
-
-  for (const p of otherPlayers) {
-    try {
-      const pc = createPeerConnection(p.id);
-
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-
-      socket.emit("webrtc-offer", {
-        targetId: p.id,
-        offer,
-      });
-
-      console.log("[VOICE] Sent offer to existing player:", p.id);
-    } catch (err) {
-      console.error("[VOICE] Error calling existing player:", err);
-    }
-  }
+  await Promise.all(
+  otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id))
+);
 });
 
 socket.on("playerJoined", async (p) => {
   if (!sceneRef || !p?.id || p.id === selfId) return;
   console.log("[NET] playerJoined:", p.id);
-  ensureRemoteMesh(sceneRef, p.id);
+
+  await ensureRemoteMesh(sceneRef, p.id);
 
   try {
     const pc = createPeerConnection(p.id);
+    if (!pc) return;
+
+    if (pc.signalingState !== "stable") return;
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
 
     socket.emit("webrtc-offer", {
       targetId: p.id,
-      offer,
+      offer: pc.localDescription,
     });
 
     console.log("[VOICE] Sent offer to:", p.id);
@@ -171,10 +271,15 @@ socket.on("playersUpdate", (players) => {
   for (const [id, p] of Object.entries(players)) {
     if (id === selfId) continue;
 
-    const mesh = ensureRemoteMesh(sceneRef, id);
+    let mesh = remoteMeshes.get(id);
+
+    if (!mesh) {
+      ensureRemoteMesh(sceneRef, id);
+      continue;
+    }
 
     if (p?.pos) {
-      mesh.position.set(p.pos.x, p.pos.y, p.pos.z);
+      mesh.position.set(p.pos.x, p.pos.y - 2.2, p.pos.z);
     }
     if (typeof p?.rotY === "number") {
       mesh.rotation.y = p.rotY;
@@ -187,6 +292,12 @@ socket.on("webrtc-offer", async ({ fromId, offer }) => {
     console.log("[VOICE] Received offer from:", fromId);
 
     const pc = createPeerConnection(fromId);
+    if(!pc) return;
+
+    if (pc.signalingState !== "stable") {
+      console.warn("[VOICE] Ignoring offer; signaling state is", pc.signalingState);
+      return;
+    }
 
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
 
@@ -195,7 +306,7 @@ socket.on("webrtc-offer", async ({ fromId, offer }) => {
 
     socket.emit("webrtc-answer", {
       targetId: fromId,
-      answer,
+      answer: pc.localDescription,
     });
   } catch (err) {
     console.error("[VOICE] Error handling offer:", err);
@@ -208,6 +319,11 @@ socket.on("webrtc-answer", async ({ fromId, answer }) => {
 
     const pc = peerConnections.get(fromId);
     if (!pc) return;
+
+    if (pc.signalingState !== "have-local-offer") {
+      console.warn("[VOICE] Unexpected answer in state:", pc.signalingState);
+      return;
+    }
 
     await pc.setRemoteDescription(new RTCSessionDescription(answer));
   } catch (err) {
@@ -226,12 +342,62 @@ socket.on("webrtc-ice-candidate", async ({ fromId, candidate }) => {
   }
 });
 
+let audioUnlocked = false;
+
+async function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+
+  try {
+    const testAudio = document.createElement("audio");
+    testAudio.autoplay = true;
+    testAudio.playsInline = true;
+    document.body.appendChild(testAudio);
+    await testAudio.play().catch(() => {});
+    testAudio.remove();
+    console.log("[VOICE] Audio unlocked");
+  } catch (err) {
+    console.warn("[VOICE] Audio unlock failed:", err);
+  }
+}
+
+window.addEventListener("click", unlockAudio, { once: true });
+window.addEventListener("touchstart", unlockAudio, { once: true });
+
 async function main() {
 
   // Request microphone access
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
     console.log("[VOICE] Microphone ready");
+
+    const audioTracks = localStream.getAudioTracks();
+    console.log("[VOICE] Audio track count:", audioTracks.length);
+
+    if (audioTracks.length === 0) {
+      console.warn("[VOICE] No audio tracks were returned by getUserMedia");
+    }
+
+    audioTracks.forEach((track, i) => {
+      console.log(`[VOICE] Local audio track ${i}:`, {
+        label: track.label,
+        enabled: track.enabled,
+        muted: track.muted,
+        readyState: track.readyState
+      });
+
+      track.onmute = () => console.warn(`[VOICE] Track ${i} muted`);
+      track.onunmute = () => console.log(`[VOICE] Track ${i} unmuted`);
+      track.onended = () => console.warn(`[VOICE] Track ${i} ended`);
+    });
+
+
   } catch (err) {
     console.error("[VOICE] Microphone error:", err);
   }
@@ -242,6 +408,7 @@ async function main() {
 
   scene.debugLayer.show();
 
+  socket.connect();
 
   const SEND_HZ = 15;
   let lastSend = 0;
