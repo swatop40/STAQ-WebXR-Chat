@@ -1,4 +1,5 @@
 import * as BABYLON from "babylonjs";
+import * as GUI from "babylonjs-gui";
 import "babylonjs-inspector";
 import { io } from "socket.io-client";
 
@@ -27,6 +28,10 @@ const pendingRemoteMeshes = new Map();
 
 let avatarTemplateRoot = null;
 let avatarTemplateMeshes = [];
+
+let playerName = "Player";
+let uiTexture = null;
+const remoteNameLabels = new Map();
 
 // Voice chat variables
 let localStream = null;
@@ -80,7 +85,13 @@ async function ensureRemoteMesh(scene, id) {
       clone.setEnabled(true);
       clone.parent = root;
     });
+    const nameAnchor = new BABYLON.TransformNode(`nameAnchor_${id}`, scene);
+    nameAnchor.parent = root;
+    nameAnchor.position.set(0, 3.6, 0);
 
+    root.metadata = {
+      nameAnchor
+    };
     root.scaling.set(.8, .8, .8);
     root.position.y = 0;
 
@@ -93,8 +104,50 @@ async function ensureRemoteMesh(scene, id) {
   return await creationPromise;
 }
 
+function ensureRemoteNameLabel(id, mesh, name = "Player") {
+  const anchor = mesh.metadata?.nameAnchor || mesh;
+
+  let label = remoteNameLabels.get(id);
+  if (label) {
+    label.textBlock.text = name;
+    label.rect.linkWithMesh(anchor);
+    return label;
+  }
+
+  const rect = new GUI.Rectangle(`nameRect_${id}`);
+  rect.width = "140px";
+  rect.height = "32px";
+  rect.cornerRadius = 10;
+  rect.thickness = 1;
+  rect.background = "black";
+  rect.alpha = 0.65;
+
+  const text = new GUI.TextBlock(`nameText_${id}`, name);
+  text.color = "white";
+  text.fontSize = 14;
+
+  rect.addControl(text);
+  uiTexture.addControl(rect);
+
+  rect.linkWithMesh(anchor);
+  rect.linkOffsetY = 0;
+
+  label = { rect, textBlock: text };
+  remoteNameLabels.set(id, label);
+  return label;
+}
+
+function removeRemoteNameLabel(id) {
+  const label = remoteNameLabels.get(id);
+  if (label) {
+    label.rect.dispose();
+    remoteNameLabels.delete(id);
+  }
+}
+
 function removeRemoteMesh(id) {
   pendingRemoteMeshes.delete(id);
+  removeRemoteNameLabel(id);
 
   const root = remoteMeshes.get(id);
   if (root) {
@@ -278,6 +331,8 @@ socket.on("playersUpdate", (players) => {
       continue;
     }
 
+    ensureRemoteNameLabel(id, mesh, p.name || "Player");
+
     if (p?.pos) {
       mesh.position.set(p.pos.x, p.pos.y - 2.2, p.pos.z);
     }
@@ -404,6 +459,7 @@ async function main() {
 
   const scene = await startScene(engine);
   sceneRef = scene;
+  uiTexture = GUI.AdvancedDynamicTexture.CreateFullscreenUI("nameUI", true, scene);
 
 
   scene.debugLayer.show();
@@ -426,6 +482,7 @@ async function main() {
     const pos = cam.position;
 
     socket.emit("pose", {
+      name: playerName,
       pos: { x: pos.x, y: pos.y, z: pos.z },
       rotY: extractYaw(cam),
     });
@@ -434,4 +491,24 @@ async function main() {
   window.addEventListener("resize", () => engine.resize());
 }
 
-main();
+const joinOverlay = document.getElementById("joinOverlay");
+const nameInput = document.getElementById("nameInput");
+const joinButton = document.getElementById("joinButton");
+
+async function handleJoin() {
+  const enteredName = nameInput.value.trim();
+  playerName = enteredName || `Player-${Math.floor(Math.random() * 1000)}`;
+
+  joinOverlay.style.display = "none";
+
+  await unlockAudio();
+  await main();
+}
+
+joinButton.addEventListener("click", handleJoin);
+
+nameInput.addEventListener("keydown", async (e) => {
+  if (e.key === "Enter") {
+    await handleJoin();
+  }
+});

@@ -8,9 +8,33 @@ import {
   WebXRFeatureName,
 } from "babylonjs";
 import "babylonjs-loaders";
-
 import * as CANNON from "cannon"; 
 import "babylonjs-loaders";
+
+async function placeModel(scene, fileName, position, rotation = null, scaling = null) {
+  const result = await SceneLoader.ImportMeshAsync(
+    null,
+    "/object-models/",
+    fileName,
+    scene
+  );
+
+  const root = result.meshes[0];
+
+  if (position) {
+    root.position.copyFrom(position);
+  }
+
+  if (rotation) {
+    root.rotation = rotation;
+  }
+
+  if (scaling) {
+    root.scaling = scaling;
+  }
+
+  return result;
+}
 
 export async function startScene(engine) {
   const scene = new Scene(engine);
@@ -35,6 +59,63 @@ export async function startScene(engine) {
   
   const room = await SceneLoader.ImportMeshAsync(null, "/scene-models/", "test-room.glb", scene);
   console.log("Imported meshes:", room.meshes.map((m) => m.name));
+
+  // Showcase models
+  await placeModel(
+    scene,
+    "table.glb",
+    new Vector3(1.23, 1.59, 8.87),
+    new Vector3(0, Math.PI / 2, 0),
+    new Vector3(1, 1, 1)
+  );
+
+  await placeModel(
+    scene,
+    "chair.glb",
+    new Vector3(3.20, 0.68, 8.75),
+    new Vector3(0, 0, 0),
+    new Vector3(0.5, 0.5, 0.5)
+  );
+
+    await placeModel(
+    scene,
+    "chair.glb",
+    new Vector3(-0.61, 0.68, 8.75),
+    new Vector3(0, Math.PI, 0),
+    new Vector3(0.5, 0.5, 0.5)
+  );
+
+  await placeModel(
+    scene,
+    "dart-target.glb",
+    new Vector3(-7.16, 2.11, 10.98),
+    new Vector3(0, -Math.PI / 2, 0),
+    new Vector3(0.7, 0.7, 0.7)
+  );
+
+  await placeModel(
+    scene,
+    "dart-blue.glb",
+    new Vector3(0.80, 1.76, 9.24),
+    new Vector3(0, Math.PI / 6),
+    new Vector3(.19, .19, .19)
+  );
+
+  await placeModel(
+    scene,
+    "dart-red.glb",
+    new Vector3(1.84, 1.76, 9.24),
+    new Vector3(0, 0, -Math.PI / 6),
+    new Vector3(.19, .19, .19)
+  );
+
+  await placeModel(
+    scene,
+    "default-avatar.glb",
+    new Vector3(-9.47, 0.00, 9.47),
+    new Vector3(0, Math.PI / 1.5, 0),
+    new Vector3(0.8, 0.8, 0.8)
+  );
 
   // Box affected by gravity + Falls
 box.physicsImpostor = new BABYLON.PhysicsImpostor(

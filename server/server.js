@@ -23,6 +23,7 @@ io.on("connection", (socket) => {
 
   players.set(socket.id, {
     id: socket.id,
+    name: "Player",
     pos: makeSpawn(),
     rotY: 0,
     room: "lobby",
@@ -38,6 +39,11 @@ io.on("connection", (socket) => {
   socket.on("pose", (data) => {
     const p = players.get(socket.id);
     if (!p || !data) return;
+
+    if (typeof data.name === "string" && data.name.trim()) {
+      p.name = data.name.trim().slice(0, 20);
+    }
+
 
     if (data.pos && typeof data.pos.x === "number") {
       p.pos = {
