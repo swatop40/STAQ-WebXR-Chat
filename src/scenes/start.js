@@ -272,7 +272,7 @@ export async function startScene(engine) {
   mirror.material = mirrorMat;
 
   scene.mirrorTex = mirrorTex;
-  scene.mirrorMesh = mirror;
+scene.mirrorMesh = mirror;
 
   await scene.whenReadyAsync();
 
