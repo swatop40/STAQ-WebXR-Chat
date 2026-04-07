@@ -6,10 +6,15 @@ import {
   FreeCamera,
   SceneLoader,
   WebXRFeatureName,
+  CannonJSPlugin,
+  PhysicsImpostor,
+  Plane,
+  StandardMaterial,
+  MirrorTexture,
+  Color3,
 } from "babylonjs";
 import "babylonjs-loaders";
-import * as CANNON from "cannon"; 
-import "babylonjs-loaders";
+import * as CANNON from "cannon";
 
 async function placeModel(scene, fileName, position, rotation = null, scaling = null) {
   const result = await SceneLoader.ImportMeshAsync(
@@ -40,27 +45,28 @@ export async function startScene(engine) {
   const scene = new Scene(engine);
 
   scene.enablePhysics(
-  new BABYLON.Vector3(0, -9.81, 0), // gravity
-  new BABYLON.CannonJSPlugin(true, 10, CANNON) // plugin with imported CANNON
-);
-  
+    new Vector3(0, -9.81, 0),
+    new CannonJSPlugin(true, 10, CANNON)
+  );
+
   const cam = new FreeCamera("cam", new Vector3(0.25, 2, -8), scene);
   cam.rotation = new Vector3(0.19996493417004554, -6.291316540956004, 0);
-  cam.attachControl(); 
+  cam.attachControl();
+
   new HemisphericLight("light", new Vector3(0, 2, 0), scene);
 
-  
   const box = MeshBuilder.CreateBox("box", { size: 0.5 }, scene);
   box.position = new Vector3(0, 1, 0);
+
+  const mirror = MeshBuilder.CreatePlane("mirror", { width: 4.5, height: 7.2 }, scene);
+  mirror.position = new Vector3(7.29, 1, 11); // example
 
   const ground = MeshBuilder.CreateGround("ground", { width: 6, height: 6 }, scene);
   ground.position.y = -0.25;
 
-  
   const room = await SceneLoader.ImportMeshAsync(null, "/scene-models/", "test-room.glb", scene);
   console.log("Imported meshes:", room.meshes.map((m) => m.name));
 
-  // Showcase models
   await placeModel(
     scene,
     "table.glb",
@@ -77,7 +83,7 @@ export async function startScene(engine) {
     new Vector3(0.5, 0.5, 0.5)
   );
 
-    await placeModel(
+  await placeModel(
     scene,
     "chair.glb",
     new Vector3(-0.61, 0.68, 8.75),
@@ -97,8 +103,8 @@ export async function startScene(engine) {
     scene,
     "dart-blue.glb",
     new Vector3(0.80, 1.76, 9.24),
-    new Vector3(0, Math.PI / 6),
-    new Vector3(.19, .19, .19)
+    new Vector3(0, Math.PI / 6, 0),
+    new Vector3(0.19, 0.19, 0.19)
   );
 
   await placeModel(
@@ -106,124 +112,141 @@ export async function startScene(engine) {
     "dart-red.glb",
     new Vector3(1.84, 1.76, 9.24),
     new Vector3(0, 0, -Math.PI / 6),
-    new Vector3(.19, .19, .19)
+    new Vector3(0.19, 0.19, 0.19)
   );
 
   await placeModel(
     scene,
     "default-avatar.glb",
-    new Vector3(-9.47, 0.00, 9.47),
+    new Vector3(-9.47, 0.0, 9.47),
     new Vector3(0, Math.PI / 1.5, 0),
     new Vector3(0.8, 0.8, 0.8)
   );
 
-  // Box affected by gravity + Falls
-box.physicsImpostor = new BABYLON.PhysicsImpostor(
-  box,
-  BABYLON.PhysicsImpostor.BoxImpostor, // shape of the physics body
-  { mass: 1, restitution: 0.2, friction: 0.5 }, // mass>0 so gravity affects it
-  scene
-);
+  box.physicsImpostor = new PhysicsImpostor(
+    box,
+    PhysicsImpostor.BoxImpostor,
+    { mass: 1, restitution: 0.2, friction: 0.5 },
+    scene
+  );
 
-// Ground stays static
-ground.physicsImpostor = new BABYLON.PhysicsImpostor(
-  ground,
-  BABYLON.PhysicsImpostor.BoxImpostor,
-  { mass: 0, restitution: 0.2, friction: 0.8 }, // mass=0 → immovable
-  scene
-);
+  ground.physicsImpostor = new PhysicsImpostor(
+    ground,
+    PhysicsImpostor.BoxImpostor,
+    { mass: 0, restitution: 0.2, friction: 0.8 },
+    scene
+  );
 
-const wallThickness = 0.2;
-const wallHeight = 2;
-const wallLength = 6;
+  const wallThickness = 0.2;
+  const wallHeight = 2;
+  const wallLength = 6;
 
-const walls = [];
+  const walls = [];
 
-// Back wall
-walls.push(BABYLON.MeshBuilder.CreateBox("backWall", { width: wallLength, height: wallHeight, depth: wallThickness }, scene));
-walls[0].position.set(0, wallHeight / 2, wallLength / 2);
-walls[0].physicsImpostor = new BABYLON.PhysicsImpostor(
-  walls[0],
-  BABYLON.PhysicsImpostor.BoxImpostor,
-  { mass: 0, restitution: 0.2, friction: 0.8 },
-  scene
-);
+  walls.push(
+    MeshBuilder.CreateBox(
+      "backWall",
+      { width: wallLength, height: wallHeight, depth: wallThickness },
+      scene
+    )
+  );
+  walls[0].position.set(0, wallHeight / 2, wallLength / 2);
+  walls[0].physicsImpostor = new PhysicsImpostor(
+    walls[0],
+    PhysicsImpostor.BoxImpostor,
+    { mass: 0, restitution: 0.2, friction: 0.8 },
+    scene
+  );
 
-// Front wall
-walls.push(BABYLON.MeshBuilder.CreateBox("frontWall", { width: wallLength, height: wallHeight, depth: wallThickness }, scene));
-walls[1].position.set(0, wallHeight / 2, -wallLength / 2);
-walls[1].physicsImpostor = new BABYLON.PhysicsImpostor(
-  walls[1],
-  BABYLON.PhysicsImpostor.BoxImpostor,
-  { mass: 0, restitution: 0.2, friction: 0.8 },
-  scene
-);
+  walls.push(
+    MeshBuilder.CreateBox(
+      "frontWall",
+      { width: wallLength, height: wallHeight, depth: wallThickness },
+      scene
+    )
+  );
+  walls[1].position.set(0, wallHeight / 2, -wallLength / 2);
+  walls[1].physicsImpostor = new PhysicsImpostor(
+    walls[1],
+    PhysicsImpostor.BoxImpostor,
+    { mass: 0, restitution: 0.2, friction: 0.8 },
+    scene
+  );
 
-// Left wall
-walls.push(BABYLON.MeshBuilder.CreateBox("leftWall", { width: wallThickness, height: wallHeight, depth: wallLength }, scene));
-walls[2].position.set(-wallLength / 2, wallHeight / 2, 0);
-walls[2].physicsImpostor = new BABYLON.PhysicsImpostor(
-  walls[2],
-  BABYLON.PhysicsImpostor.BoxImpostor,
-  { mass: 0, restitution: 0.2, friction: 0.8 },
-  scene
-);
+  walls.push(
+    MeshBuilder.CreateBox(
+      "leftWall",
+      { width: wallThickness, height: wallHeight, depth: wallLength },
+      scene
+    )
+  );
+  walls[2].position.set(-wallLength / 2, wallHeight / 2, 0);
+  walls[2].physicsImpostor = new PhysicsImpostor(
+    walls[2],
+    PhysicsImpostor.BoxImpostor,
+    { mass: 0, restitution: 0.2, friction: 0.8 },
+    scene
+  );
 
-// Right wall
-walls.push(BABYLON.MeshBuilder.CreateBox("rightWall", { width: wallThickness, height: wallHeight, depth: wallLength }, scene));
-walls[3].position.set(wallLength / 2, wallHeight / 2, 0);
-walls[3].physicsImpostor = new BABYLON.PhysicsImpostor(
-  walls[3],
-  BABYLON.PhysicsImpostor.BoxImpostor,
-  { mass: 0, restitution: 0.2, friction: 0.8 },
-  scene
-);
+  walls.push(
+    MeshBuilder.CreateBox(
+      "rightWall",
+      { width: wallThickness, height: wallHeight, depth: wallLength },
+      scene
+    )
+  );
+  walls[3].position.set(wallLength / 2, wallHeight / 2, 0);
+  walls[3].physicsImpostor = new PhysicsImpostor(
+    walls[3],
+    PhysicsImpostor.BoxImpostor,
+    { mass: 0, restitution: 0.2, friction: 0.8 },
+    scene
+  );
 
+  const playerHeight = 1.8;
+  const playerWidth = 0.6;
 
-const playerHeight = 1.8;
-const playerWidth = 0.6;
+  const playerMesh = MeshBuilder.CreateBox(
+    "player",
+    {
+      width: playerWidth,
+      height: playerHeight,
+      depth: playerWidth,
+    },
+    scene
+  );
 
-// Create an invisible box as the player physics body
-//Coliders work Kinda, Colisions with walls stop but if are pushed causes extreme physics reactions, and the player/objects falls through the ground. I’m not sure if it’s a problem with the physics impostor setup or if there’s something else going on.
-const playerMesh = BABYLON.MeshBuilder.CreateBox("player", {
-    width: playerWidth,
-    height: playerHeight,
-    depth: playerWidth
-}, scene);
+  playerMesh.isVisible = false;
+  playerMesh.position.copyFrom(cam.position);
 
-playerMesh.isVisible = false; // hide the box
-playerMesh.position.copyFrom(cam.position); // start at camera position
-
-// Add physics impostor so gravity and collisions affect the player
-// Player Exists within the scene but for some reason imediately falls through the ground and walls. I’m not sure if it’s a problem with the physics impostor setup or if there’s something else going on.
-playerMesh.physicsImpostor = new BABYLON.PhysicsImpostor(
+  playerMesh.physicsImpostor = new PhysicsImpostor(
     playerMesh,
-    BABYLON.PhysicsImpostor.BoxImpostor,
+    PhysicsImpostor.BoxImpostor,
     { mass: 1, restitution: 0, friction: 0.5 },
     scene
-);
+  );
+
   const xr = await scene.createDefaultXRExperienceAsync({
     uiOptions: { sessionMode: "immersive-vr" },
   });
 
+  scene.xrHelper = xr;
+
   const fm = xr.baseExperience.featuresManager;
   fm.disableFeature(WebXRFeatureName.TELEPORTATION);
 
-
-  
   try {
     fm.enableFeature(WebXRFeatureName.MOVEMENT, "stable", {
-        xrInput: xr.input,
-        movementOrientationFollowsViewerPose: true,
-        movementSpeed: 0.25,
-        rotationSpeed: 0.25,
+      xrInput: xr.input,
+      movementOrientationFollowsViewerPose: true,
+      movementSpeed: 0.25,
+      rotationSpeed: 0.25,
     });
     console.log("[XR] Smooth movement enabled");
   } catch (e) {
     console.error("[XR] Movement feature failed:", e);
   }
 
-  
   try {
     fm.enableFeature(WebXRFeatureName.TURNING, "stable", {
       snapTurns: true,
@@ -234,6 +257,24 @@ playerMesh.physicsImpostor = new BABYLON.PhysicsImpostor(
     console.warn("[XR] Turning feature not available; we’ll do manual snap turn if needed.", e);
   }
 
+  const mirrorMat = new StandardMaterial("mirrorMat", scene);
+  const mirrorTex = new MirrorTexture("mirrorTex", 256, scene, true);
+
+  mirrorTex.mirrorPlane = new Plane(0, 0, 1, -mirror.position.z);
+  mirrorTex.refreshRate = 2; 
+
+  mirrorTex.renderList = scene.meshes.filter(m => m !== mirror);
+
+  mirrorMat.reflectionTexture = mirrorTex;
+  mirrorMat.diffuseColor = new Color3(0.1, 0.1, 0.1);
+  mirrorMat.specularColor = new Color3(1, 1, 1);
+
+  mirror.material = mirrorMat;
+
+  scene.mirrorTex = mirrorTex;
+  scene.mirrorMesh = mirror;
+
   await scene.whenReadyAsync();
+
   return scene;
 }

@@ -22,12 +22,26 @@ io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
   players.set(socket.id, {
-    id: socket.id,
-    name: "Player",
+  id: socket.id,
+  name: "Player",
+  room: "lobby",
+  root: {
     pos: makeSpawn(),
     rotY: 0,
-    room: "lobby",
-  });
+  },
+  head: {
+    pos: { x: 0, y: 1.6, z: 0 },
+    rot: { x: 0, y: 0, z: 0, w: 1 },
+  },
+  leftHand: {
+    pos: { x: -0.25, y: 1.3, z: 0.2 },
+    rot: { x: 0, y: 0, z: 0, w: 1 },
+  },
+  rightHand: {
+    pos: { x: 0.25, y: 1.3, z: 0.2 },
+    rot: { x: 0, y: 0, z: 0, w: 1 },
+  },
+});
 
   socket.emit("init", {
     selfId: socket.id,
@@ -37,25 +51,76 @@ io.on("connection", (socket) => {
   socket.broadcast.emit("playerJoined", players.get(socket.id));
 
   socket.on("pose", (data) => {
-    const p = players.get(socket.id);
-    if (!p || !data) return;
+  const p = players.get(socket.id);
+  if (!p || !data) return;
 
-    if (typeof data.name === "string" && data.name.trim()) {
-      p.name = data.name.trim().slice(0, 20);
-    }
+  if (typeof data.name === "string" && data.name.trim()) {
+    p.name = data.name.trim().slice(0, 20);
+  }
 
+  if (data.root?.pos && typeof data.root.pos.x === "number") {
+    p.root.pos = {
+      x: data.root.pos.x,
+      y: data.root.pos.y,
+      z: data.root.pos.z,
+    };
+  }
 
-    if (data.pos && typeof data.pos.x === "number") {
-      p.pos = {
-        x: data.pos.x,
-        y: data.pos.y,
-        z: data.pos.z,
-      };
-    }
-    if (typeof data.rotY === "number") {
-      p.rotY = data.rotY;
-    }
-  });
+  if (typeof data.root?.rotY === "number") {
+    p.root.rotY = data.root.rotY;
+  }
+
+  if (data.head?.pos && typeof data.head.pos.x === "number") {
+    p.head.pos = {
+      x: data.head.pos.x,
+      y: data.head.pos.y,
+      z: data.head.pos.z,
+    };
+  }
+
+  if (data.head?.rot && typeof data.head.rot.w === "number") {
+    p.head.rot = {
+      x: data.head.rot.x,
+      y: data.head.rot.y,
+      z: data.head.rot.z,
+      w: data.head.rot.w,
+    };
+  }
+
+  if (data.leftHand?.pos && typeof data.leftHand.pos.x === "number") {
+    p.leftHand.pos = {
+      x: data.leftHand.pos.x,
+      y: data.leftHand.pos.y,
+      z: data.leftHand.pos.z,
+    };
+  }
+
+  if (data.leftHand?.rot && typeof data.leftHand.rot.w === "number") {
+    p.leftHand.rot = {
+      x: data.leftHand.rot.x,
+      y: data.leftHand.rot.y,
+      z: data.leftHand.rot.z,
+      w: data.leftHand.rot.w,
+    };
+  }
+
+  if (data.rightHand?.pos && typeof data.rightHand.pos.x === "number") {
+    p.rightHand.pos = {
+      x: data.rightHand.pos.x,
+      y: data.rightHand.pos.y,
+      z: data.rightHand.pos.z,
+    };
+  }
+
+  if (data.rightHand?.rot && typeof data.rightHand.rot.w === "number") {
+    p.rightHand.rot = {
+      x: data.rightHand.rot.x,
+      y: data.rightHand.rot.y,
+      z: data.rightHand.rot.z,
+      w: data.rightHand.rot.w,
+    };
+  }
+});
 
 //WEBRTC SIGNALING
 
