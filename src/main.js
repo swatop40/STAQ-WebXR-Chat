@@ -93,6 +93,7 @@ async function ensureRemoteMesh(scene, id) {
     await loadAvatarTemplate(scene);
 
     const root = new BABYLON.TransformNode(`remote_${id}`, scene);
+    root.position = new BABYLON.Vector3(0, -0.9, 0);
 
     const instantiated = avatarContainer.instantiateModelsToScene(
       (name) => `${name}_${id}`,
@@ -176,6 +177,11 @@ async function ensureLocalAvatar(scene) {
 
   const root = new BABYLON.TransformNode("localAvatar", scene);
 
+if (scene.playerMesh) {
+    root.parent = scene.playerMesh;
+    root.position = new BABYLON.Vector3(0, -1.6, 0); 
+}
+
   const instantiated = avatarContainer.instantiateModelsToScene(
     (name) => `${name}_local`,
     false
@@ -209,6 +215,8 @@ async function ensureLocalAvatar(scene) {
   if (rightHandMesh) rightHandMesh.parent = rightHandAnchor;
 
   root.scaling.set(0.8, 0.8, 0.8);
+  root.position = new BABYLON.Vector3(0, -0.9, 0);
+
 
   // Hide local head in first person so it doesn't block the camera
   if (headMesh) {
@@ -476,9 +484,9 @@ socket.on("playersUpdate", async (players) => {
 
     mesh.position.set(
       p.root?.pos?.x ?? 0,
-      (p.root?.pos?.y ?? 0) - 1.6,
+      p.root?.pos?.y ?? 0,
       p.root?.pos?.z ?? 0
-    );
+  );
     mesh.rotation.y = p.root?.rotY ?? 0;
 
     const bodyAnchor = mesh.metadata?.bodyAnchor;
@@ -494,7 +502,7 @@ socket.on("playersUpdate", async (players) => {
     if (headAnchor && p.head?.pos && p.head?.rot && p.root?.pos) {
       headAnchor.position = vec3From({
         x: p.head.pos.x - p.root.pos.x,
-        y: p.head.pos.y - p.root.pos.y + .15,
+        y: p.head.pos.y - p.root.pos.y -1,
         z: p.head.pos.z - p.root.pos.z,
       });
       headAnchor.rotationQuaternion = quatFrom(p.head.rot);
@@ -656,10 +664,13 @@ async function main() {
     lastSend = now;
 
     const cam = scene.activeCamera;
-    const pos = cam.position;
+    const pos = scene.playerMesh 
+      ? scene.playerMesh.position 
+      : cam.position;
 
-    let headPos = { x: pos.x, y: pos.y, z: pos.z };
-    let headRot = { x: 0, y: 0, z: 0, w: 1 };
+    const headWorld = cam.globalPosition;
+     let headPos = { x: headWorld.x, y: headWorld.y, z: headWorld.z };
+     let headRot = { x: 0, y: 0, z: 0, w: 1 };
 
     if (cam.rotationQuaternion) {
       headRot = {
@@ -702,7 +713,6 @@ async function main() {
     }
 
     if (localAvatarParts) {
-  localAvatarParts.root.position.set(pos.x, pos.y - 1.6, pos.z);
   localAvatarParts.root.rotation.y = extractYaw(cam);
 
   if (localAvatarParts.bodyAnchor) {
@@ -713,7 +723,7 @@ async function main() {
   if (localAvatarParts.headAnchor) {
     localAvatarParts.headAnchor.position = vec3From({
       x: headPos.x - pos.x,
-      y: headPos.y - pos.y + 0.1,
+      y: headPos.y - pos.y - 1,
       z: headPos.z - pos.z,
     });
     localAvatarParts.headAnchor.rotationQuaternion = quatFrom(headRot);

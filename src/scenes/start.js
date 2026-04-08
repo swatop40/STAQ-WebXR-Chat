@@ -49,9 +49,36 @@ export async function startScene(engine) {
     new CannonJSPlugin(true, 10, CANNON)
   );
 
-  const cam = new FreeCamera("cam", new Vector3(0.25, 2, -8), scene);
-  cam.rotation = new Vector3(0.19996493417004554, -6.291316540956004, 0);
+  const cam = new FreeCamera("cam", new Vector3(0, 0, 0), scene);
+  cam.rotation = new Vector3(0, 0, 0);
   cam.attachControl();
+  cam.inputs.clear();
+  const canvas = scene.getEngine().getRenderingCanvas();
+  cam.inputs.add(new BABYLON.FreeCameraMouseInput());
+  cam.attachControl(canvas, true);
+
+  scene._movementKeys = {
+    w: false,
+    a: false,
+    s: false,
+    d: false,
+    ArrowUp: false,
+    ArrowDown: false,
+    ArrowLeft: false,
+    ArrowRight: false
+};
+
+window.addEventListener("keydown", (e) => {
+    if (scene._movementKeys.hasOwnProperty(e.key)) {
+        scene._movementKeys[e.key] = true;
+    }
+});
+
+window.addEventListener("keyup", (e) => {
+    if (scene._movementKeys.hasOwnProperty(e.key)) {
+        scene._movementKeys[e.key] = false;
+    }
+});
 
   new HemisphericLight("light", new Vector3(0, 2, 0), scene);
 
@@ -61,8 +88,8 @@ export async function startScene(engine) {
   const mirror = MeshBuilder.CreatePlane("mirror", { width: 4.5, height: 7.2 }, scene);
   mirror.position = new Vector3(7.29, 1, 11); // example
 
-  const ground = MeshBuilder.CreateGround("ground", { width: 6, height: 6 }, scene);
-  ground.position.y = -0.25;
+  const ground = MeshBuilder.CreateGround("ground", { width: 20, height: 20 }, scene);
+  ground.position.y = -0;
 
   const room = await SceneLoader.ImportMeshAsync(null, "/scene-models/", "test-room.glb", scene);
   console.log("Imported meshes:", room.meshes.map((m) => m.name));
@@ -217,7 +244,10 @@ export async function startScene(engine) {
   );
 
   playerMesh.isVisible = false;
-  playerMesh.position.copyFrom(cam.position);
+  playerMesh.position = new Vector3(0.25, 2, -8);
+
+  cam.parent = playerMesh;
+  cam.position = new Vector3(0, playerHeight * 0.5, 0);
 
   playerMesh.physicsImpostor = new PhysicsImpostor(
     playerMesh,
@@ -225,6 +255,13 @@ export async function startScene(engine) {
     { mass: 1, restitution: 0, friction: 0.5 },
     scene
   );
+
+  const body = playerMesh.physicsImpostor.physicsBody;
+  if (body && body.angularFactor) {
+    body.angularFactor.set(0, 0, 0);
+}
+
+  scene.playerMesh = playerMesh;
 
   const xr = await scene.createDefaultXRExperienceAsync({
     uiOptions: { sessionMode: "immersive-vr" },
@@ -236,12 +273,12 @@ export async function startScene(engine) {
   fm.disableFeature(WebXRFeatureName.TELEPORTATION);
 
   try {
-    fm.enableFeature(WebXRFeatureName.MOVEMENT, "stable", {
-      xrInput: xr.input,
-      movementOrientationFollowsViewerPose: true,
-      movementSpeed: 0.25,
-      rotationSpeed: 0.25,
-    });
+   // fm.enableFeature(WebXRFeatureName.MOVEMENT, "stable", {
+    //  xrInput: xr.input,
+     // movementOrientationFollowsViewerPose: true,
+     // movementSpeed: 0.25,
+     // rotationSpeed: 0.25,
+    //});
     console.log("[XR] Smooth movement enabled");
   } catch (e) {
     console.error("[XR] Movement feature failed:", e);
@@ -272,7 +309,109 @@ export async function startScene(engine) {
   mirror.material = mirrorMat;
 
   scene.mirrorTex = mirrorTex;
-scene.mirrorMesh = mirror;
+  scene.mirrorMesh = mirror;
+
+
+scene.onBeforeRenderObservable.add(() => {
+    if (!scene.playerMesh || !scene.activeCamera) return;
+
+    const cam = scene.activeCamera;
+    const mesh = scene.playerMesh;
+
+    
+    mesh.position.x = cam.globalPosition.x;
+    mesh.position.z = cam.globalPosition.z;
+
+    cam.position.y = playerHeight * 0.5;
+});
+
+const moveVec = new Vector3(0, 0, 0);
+
+scene.onBeforeRenderObservable.add(() => {
+    if (!scene.playerMesh) return;
+
+    const mesh = scene.playerMesh;
+
+    // Desktop movement (WASD)
+   const keys = scene._movementKeys;
+
+    let inputX = 0;
+    let inputZ = 0;
+
+    if (keys.w || keys.ArrowUp) inputZ += 1;
+    if (keys.s || keys.ArrowDown) inputZ -= 1;
+    if (keys.a || keys.ArrowLeft) inputX -= 1;
+    if (keys.d || keys.ArrowRight) inputX += 1;
+
+    if (inputX !== 0 || inputZ !== 0) {
+
+        // Get camera directions
+        const forward = cam.getDirection(new BABYLON.Vector3(0, 0, 1));
+        const right   = cam.getDirection(new BABYLON.Vector3(1, 0, 0));
+
+        // Flatten to horizontal plane
+        forward.y = 0;
+        right.y = 0;
+
+        forward.normalize();
+        right.normalize();
+
+        // Combine input with camera directions
+        const move = forward.scale(inputZ).add(right.scale(inputX));
+
+        const speed = .75; // Adjust as needed;
+
+        mesh.physicsImpostor.setLinearVelocity(
+            new BABYLON.Vector3(
+                move.x * speed,
+                mesh.physicsImpostor.getLinearVelocity().y,
+                move.z * speed
+            )
+        );
+    }
+
+    const body = mesh.physicsImpostor.physicsBody;
+    if (body) {
+        body.angularVelocity.set(0, 0, 0);
+    }
+
+    // VR controller movement
+    const xrHelper = scene.xrHelper;
+    if (xrHelper && xrHelper.input && xrHelper.input.controllers) {
+        for (const controller of xrHelper.input.controllers) {
+            const gamepad = controller.inputSource?.gamepad;
+            if (!gamepad || !gamepad.axes) continue;
+
+            // XR axes:
+            const x = gamepad.axes[2] || 0;
+            const y = gamepad.axes[3] || 0;
+
+            // Deadzone
+            if (Math.abs(x) < 0.1 && Math.abs(y) < 0.1) continue;
+
+            // Camera-based movement directions
+            const forward = cam.getDirection(new BABYLON.Vector3(0, 0, 1));
+            const right = cam.getDirection(new BABYLON.Vector3(1, 0, 0));
+
+            forward.y = 0;
+            right.y = 0;
+
+            forward.normalize();
+            right.normalize();
+
+            // Combine movement
+            const move = forward.scale(-y).add(right.scale(x));
+
+            mesh.physicsImpostor.setLinearVelocity(
+                new BABYLON.Vector3(
+                    move.x * speed,
+                    mesh.physicsImpostor.getLinearVelocity().y,
+                    move.z * speed
+                )
+            );
+        }
+    }
+});
 
   await scene.whenReadyAsync();
 
