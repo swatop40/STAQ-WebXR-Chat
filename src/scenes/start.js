@@ -396,6 +396,8 @@ scene.onBeforeRenderObservable.add(() => {
             forward.y = 0;
             right.y = 0;
 
+            const speed = .75; // Adjust as needed
+
             forward.normalize();
             right.normalize();
 
