@@ -413,6 +413,78 @@ scene.onBeforeRenderObservable.add(() => {
     }
 });
 
+// Create host mesh FIRST
+const menuHost = BABYLON.MeshBuilder.CreateBox("menuHost", { size: 0.01 }, scene);
+menuHost.isVisible = false; // turn true for debugging
+menuHost.rotationQuaternion = new BABYLON.Quaternion();
+
+// Create GUI manager
+const guiManager = new BABYLON.GUI.GUI3DManager(scene);
+
+// Create panel
+const menuPanel = new BABYLON.GUI.StackPanel3D();
+guiManager.addControl(menuPanel);
+
+// Link panel to host
+menuPanel.linkToTransformNode(menuHost);
+
+// Hide panel initially
+menuPanel.isVisible = false;
+menuPanel.margin = 0.2;
+
+// Add buttons
+function addMenuButton(text, callback) {
+    const button = new BABYLON.GUI.HolographicButton(text + "_btn");
+    menuPanel.addControl(button);
+    button.text = text;
+    button.onPointerUpObservable.add(callback);
+    return button;
+}
+
+addMenuButton("Switch Environment", () => console.log("Switch environment clicked"));
+addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
+addMenuButton("Exit Website", () => window.location.href = "https://google.com");
+
+const closeBtn = new BABYLON.GUI.HolographicButton("close_btn");
+menuPanel.addControl(closeBtn);
+closeBtn.text = "X";
+closeBtn.onPointerUpObservable.add(() => menuPanel.isVisible = false);
+
+
+//Show menu by moving the HOST
+function showMenu() {
+    console.log("showMenu() called");
+
+    const cam = scene.activeCamera;
+
+    // Position host 1 meter in front of camera
+    const forward = cam.getDirection(new BABYLON.Vector3(0, 0, 1));
+    const pos = cam.position.add(forward.scale(1));
+
+    menuHost.position.copyFrom(pos);
+
+    // Rotate host to face camera
+    const lookDir = cam.position.subtract(menuHost.position).normalize();
+    menuHost.rotationQuaternion = BABYLON.Quaternion.FromLookDirectionLH(
+        lookDir,
+        BABYLON.Vector3.Up()
+    );
+
+    menuPanel.isVisible = true;
+}
+
+// 8. Toggle with ESC
+window.addEventListener("keydown", (e) => {
+    console.log("Key pressed:", e.key);
+
+    if (e.key === "Escape") {
+        console.log("Toggling menu visibility");
+        menuPanel.isVisible = !menuPanel.isVisible;
+        if (menuPanel.isVisible) showMenu();
+    }
+});
+
+
   await scene.whenReadyAsync();
 
   return scene;
