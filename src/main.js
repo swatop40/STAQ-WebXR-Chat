@@ -721,7 +721,7 @@ async function main() {
   }
 
   if (localAvatarParts.headAnchor) {
-    localAvatarParts.headAnchor.position = vec3From({
+    localAvatarParts.headAnchor.position= vec3From({
       x: headPos.x - pos.x,
       y: headPos.y - pos.y - 1,
       z: headPos.z - pos.z,

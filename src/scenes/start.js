@@ -91,6 +91,11 @@ window.addEventListener("keyup", (e) => {
   const ground = MeshBuilder.CreateGround("ground", { width: 20, height: 20 }, scene);
   ground.position.y = -0;
 
+// Desktop teleport marker
+  const teleportMarker = MeshBuilder.CreateDisc("teleportMarker", { radius: 0.3 }, scene);
+    teleportMarker.rotation.x = Math.PI / 2;
+    teleportMarker.isVisible = false;
+
   const room = await SceneLoader.ImportMeshAsync(null, "/scene-models/", "test-room.glb", scene);
   console.log("Imported meshes:", room.meshes.map((m) => m.name));
 
@@ -263,14 +268,57 @@ window.addEventListener("keyup", (e) => {
 
   scene.playerMesh = playerMesh;
 
-  const xr = await scene.createDefaultXRExperienceAsync({
-    uiOptions: { sessionMode: "immersive-vr" },
-  });
+// Desktop teleport preview (mouse hover)
+  scene.onPointerMove = function (evt, pickInfo) {
+    if (!pickInfo.hit) {
+        teleportMarker.isVisible = false;
+        return;
+    }
 
-  scene.xrHelper = xr;
+    if (pickInfo.pickedMesh === ground) {
+        teleportMarker.position.copyFrom(pickInfo.pickedPoint);
+        teleportMarker.isVisible = true;
+    } else {
+        teleportMarker.isVisible = false;
+    }
+};
+
+scene.onPointerDown = function (evt, pickInfo) {
+    if (evt.button !== 0) return; 
+    if (!pickInfo.hit) return;
+
+    if (pickInfo.pickedMesh === ground) {
+        const target = pickInfo.pickedPoint.clone();
+        target.y += 1.7;
+
+        // Move player mesh
+        scene.playerMesh.position.copyFrom(target);
+    }
+};
+
+
+ const xr = await scene.createDefaultXRExperienceAsync({
+  uiOptions: { sessionMode: "immersive-vr" },
+  floorMeshes: [ground],
+});
+
+ scene.xrHelper = xr;
 
   const fm = xr.baseExperience.featuresManager;
-  fm.disableFeature(WebXRFeatureName.TELEPORTATION);
+
+  const VRteleportation = fm.enableFeature(
+    WebXRFeatureName.TELEPORTATION,
+    "stable",
+    {
+      xrInput: xr.input,
+      floorMeshes: [ground],
+      renderingGroupId: 1,
+      parabolicRayEnabled: false,
+    }
+);
+
+xr.teleportation = VRteleportation;
+
 
   try {
    // fm.enableFeature(WebXRFeatureName.MOVEMENT, "stable", {
@@ -374,49 +422,13 @@ scene.onBeforeRenderObservable.add(() => {
     if (body) {
         body.angularVelocity.set(0, 0, 0);
     }
-
-    // VR controller movement
-    const xrHelper = scene.xrHelper;
-    if (xrHelper && xrHelper.input && xrHelper.input.controllers) {
-        for (const controller of xrHelper.input.controllers) {
-            const gamepad = controller.inputSource?.gamepad;
-            if (!gamepad || !gamepad.axes) continue;
-
-            // XR axes:
-            const x = gamepad.axes[2] || 0;
-            const y = gamepad.axes[3] || 0;
-
-            // Deadzone
-            if (Math.abs(x) < 0.1 && Math.abs(y) < 0.1) continue;
-
-            // Camera-based movement directions
-            const forward = cam.getDirection(new BABYLON.Vector3(0, 0, 1));
-            const right = cam.getDirection(new BABYLON.Vector3(1, 0, 0));
-
-            forward.y = 0;
-            right.y = 0;
-
-            forward.normalize();
-            right.normalize();
-
-            // Combine movement
-            const move = forward.scale(-y).add(right.scale(x));
-
-            mesh.physicsImpostor.setLinearVelocity(
-                new BABYLON.Vector3(
-                    move.x * speed,
-                    mesh.physicsImpostor.getLinearVelocity().y,
-                    move.z * speed
-                )
-            );
-        }
-    }
+    
 });
 
 // Create host mesh FIRST
 const menuHost = BABYLON.MeshBuilder.CreateBox("menuHost", { size: 0.01 }, scene);
-menuHost.isVisible = false; // turn true for debugging
-menuHost.rotationQuaternion = new BABYLON.Quaternion();
+  menuHost.isVisible = false; // turn true for debugging
+  menuHost.rotationQuaternion = new BABYLON.Quaternion();
 
 // Create GUI manager
 const guiManager = new BABYLON.GUI.GUI3DManager(scene);
