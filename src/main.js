@@ -71,7 +71,6 @@ async function loadAvatarTemplate(scene) {
     "default-avatar.glb",
     scene
   );
-
 }
 
 function vec3From(obj) {
@@ -80,6 +79,12 @@ function vec3From(obj) {
 
 function quatFrom(obj) {
   return new BABYLON.Quaternion(obj.x, obj.y, obj.z, obj.w);
+}
+
+function worldToLocalPosition(node, worldPos) {
+  const inv = node.getWorldMatrix().clone();
+  inv.invert();
+  return BABYLON.Vector3.TransformCoordinates(worldPos, inv);
 }
 
 async function ensureRemoteMesh(scene, id) {
@@ -116,50 +121,63 @@ async function ensureRemoteMesh(scene, id) {
     const headAnchor = new BABYLON.TransformNode(`headAnchor_${id}`, scene);
     const leftHandAnchor = new BABYLON.TransformNode(`leftHandAnchor_${id}`, scene);
     const rightHandAnchor = new BABYLON.TransformNode(`rightHandAnchor_${id}`, scene);
+    const leftHandOffset = new BABYLON.TransformNode(`leftHandOffset_${id}`, scene);
+    const rightHandOffset = new BABYLON.TransformNode(`rightHandOffset_${id}`, scene);
     const nameAnchor = new BABYLON.TransformNode(`nameAnchor_${id}`, scene);
 
     bodyAnchor.parent = root;
     headAnchor.parent = root;
     leftHandAnchor.parent = root;
     rightHandAnchor.parent = root;
+    leftHandOffset.parent = leftHandAnchor;
+    rightHandOffset.parent = rightHandAnchor;
     nameAnchor.parent = root;
 
     nameAnchor.position.set(0, 3.2, 0);
 
+    // starting tweak values
+    leftHandOffset.position.set(0, 0, 0);
+    rightHandOffset.position.set(0, 0, 0);
+
+    leftHandOffset.rotation.set(0, 0, 0);
+    rightHandOffset.rotation.set(0, 0, 0);
+
     if (bodyMesh) bodyMesh.parent = bodyAnchor;
     if (headMesh) headMesh.parent = headAnchor;
-    if (leftHandMesh) leftHandMesh.parent = leftHandAnchor;
-    if (rightHandMesh) rightHandMesh.parent = rightHandAnchor;
+    if (leftHandMesh) leftHandMesh.parent = leftHandOffset;
+    if (rightHandMesh) rightHandMesh.parent = rightHandOffset;
 
     root.scaling.set(0.8, 0.8, 0.8);
 
     root.metadata = {
-    bodyAnchor,
-    headAnchor,
-    leftHandAnchor,
-    rightHandAnchor,
-    nameAnchor,
-    bodyMesh,
-    headMesh,
-    leftHandMesh,
-    rightHandMesh,
-  };
+      bodyAnchor,
+      headAnchor,
+      leftHandAnchor,
+      rightHandAnchor,
+      leftHandOffset,
+      rightHandOffset,
+      nameAnchor,
+      bodyMesh,
+      headMesh,
+      leftHandMesh,
+      rightHandMesh,
+    };
 
-  const mirrorTex = scene?.mirrorTex;
-  if (mirrorTex) {
-    const avatarParts = [bodyMesh, headMesh, leftHandMesh, rightHandMesh].filter(Boolean);
+    const mirrorTex = scene?.mirrorTex;
+    if (mirrorTex) {
+      const avatarParts = [bodyMesh, headMesh, leftHandMesh, rightHandMesh].filter(Boolean);
 
-    for (const part of avatarParts) {
-      if (!mirrorTex.renderList.includes(part)) {
-        mirrorTex.renderList.push(part);
+      for (const part of avatarParts) {
+        if (!mirrorTex.renderList.includes(part)) {
+          mirrorTex.renderList.push(part);
+        }
       }
-    }
 
-    console.log(
-      `[MIRROR] Added avatar parts for ${id}:`,
-      avatarParts.map((m) => m.name)
-    );
-  }
+      console.log(
+        `[MIRROR] Added avatar parts for ${id}:`,
+        avatarParts.map((m) => m.name)
+      );
+    }
 
     remoteMeshes.set(id, root);
     pendingRemoteMeshes.delete(id);
@@ -177,10 +195,10 @@ async function ensureLocalAvatar(scene) {
 
   const root = new BABYLON.TransformNode("localAvatar", scene);
 
-if (scene.playerMesh) {
+  if (scene.playerMesh) {
     root.parent = scene.playerMesh;
-    root.position = new BABYLON.Vector3(0, -1.6, 0); 
-}
+    root.position = new BABYLON.Vector3(0, -1.6, 0);
+  }
 
   const instantiated = avatarContainer.instantiateModelsToScene(
     (name) => `${name}_local`,
@@ -203,20 +221,30 @@ if (scene.playerMesh) {
   const headAnchor = new BABYLON.TransformNode("localHeadAnchor", scene);
   const leftHandAnchor = new BABYLON.TransformNode("localLeftHandAnchor", scene);
   const rightHandAnchor = new BABYLON.TransformNode("localRightHandAnchor", scene);
+  const leftHandOffset = new BABYLON.TransformNode("localLeftHandOffset", scene);
+  const rightHandOffset = new BABYLON.TransformNode("localRightHandOffset", scene);
 
   bodyAnchor.parent = root;
   headAnchor.parent = root;
   leftHandAnchor.parent = root;
   rightHandAnchor.parent = root;
+  leftHandOffset.parent = leftHandAnchor;
+  rightHandOffset.parent = rightHandAnchor;
+
+  // starting tweak values
+  leftHandOffset.position.set(0, 0, 0);
+  rightHandOffset.position.set(0, 0, 0);
+
+  leftHandOffset.rotation.set(0, 0, 0);
+  rightHandOffset.rotation.set(0, 0, 0);
 
   if (bodyMesh) bodyMesh.parent = bodyAnchor;
   if (headMesh) headMesh.parent = headAnchor;
-  if (leftHandMesh) leftHandMesh.parent = leftHandAnchor;
-  if (rightHandMesh) rightHandMesh.parent = rightHandAnchor;
+  if (leftHandMesh) leftHandMesh.parent = leftHandOffset;
+  if (rightHandMesh) rightHandMesh.parent = rightHandOffset;
 
   root.scaling.set(0.8, 0.8, 0.8);
   root.position = new BABYLON.Vector3(0, -0.9, 0);
-
 
   // Hide local head in first person so it doesn't block the camera
   if (headMesh) {
@@ -234,6 +262,8 @@ if (scene.playerMesh) {
     headAnchor,
     leftHandAnchor,
     rightHandAnchor,
+    leftHandOffset,
+    rightHandOffset,
   };
 
   const mirrorTex = scene?.mirrorTex;
@@ -486,8 +516,8 @@ socket.on("playersUpdate", async (players) => {
       p.root?.pos?.x ?? 0,
       p.root?.pos?.y ?? 0,
       p.root?.pos?.z ?? 0
-  );
-    mesh.rotation.y = p.root?.rotY ?? 0;
+    );
+    mesh.rotation.y = 0;
 
     const bodyAnchor = mesh.metadata?.bodyAnchor;
     const headAnchor = mesh.metadata?.headAnchor;
@@ -496,33 +526,39 @@ socket.on("playersUpdate", async (players) => {
 
     if (bodyAnchor) {
       bodyAnchor.position.set(0, 0, 0);
-      bodyAnchor.rotation.set(0, 0, 0);
+      bodyAnchor.rotation.set(0, p.root?.rotY ?? 0, 0);
     }
 
-    if (headAnchor && p.head?.pos && p.head?.rot && p.root?.pos) {
-      headAnchor.position = vec3From({
-        x: p.head.pos.x - p.root.pos.x,
-        y: p.head.pos.y - p.root.pos.y -1,
-        z: p.head.pos.z - p.root.pos.z,
-      });
+    if (headAnchor && p.head?.pos && p.head?.rot) {
+      const localHeadPos = worldToLocalPosition(
+        mesh,
+        new BABYLON.Vector3(p.head.pos.x, p.head.pos.y, p.head.pos.z)
+      );
+
+      headAnchor.position.copyFrom(localHeadPos);
+      headAnchor.position.y += -1.0;
       headAnchor.rotationQuaternion = quatFrom(p.head.rot);
     }
 
-    if (leftHandAnchor && p.leftHand?.pos && p.leftHand?.rot && p.root?.pos) {
-      leftHandAnchor.position = vec3From({
-        x: p.leftHand.pos.x - p.root.pos.x,
-        y: p.leftHand.pos.y - p.root.pos.y + .2,
-        z: p.leftHand.pos.z - p.root.pos.z,
-      });
+    if (leftHandAnchor && p.leftHand?.pos && p.leftHand?.rot) {
+      const localLeftPos = worldToLocalPosition(
+        mesh,
+        new BABYLON.Vector3(p.leftHand.pos.x, p.leftHand.pos.y, p.leftHand.pos.z)
+      );
+
+      leftHandAnchor.position.copyFrom(localLeftPos);
+      leftHandAnchor.position.y += 0.2;
       leftHandAnchor.rotationQuaternion = quatFrom(p.leftHand.rot);
     }
 
-    if (rightHandAnchor && p.rightHand?.pos && p.rightHand?.rot && p.root?.pos) {
-      rightHandAnchor.position = vec3From({
-        x: p.rightHand.pos.x - p.root.pos.x,
-        y: p.rightHand.pos.y - p.root.pos.y + .2,
-        z: p.rightHand.pos.z - p.root.pos.z,
-      });
+    if (rightHandAnchor && p.rightHand?.pos && p.rightHand?.rot) {
+      const localRightPos = worldToLocalPosition(
+        mesh,
+        new BABYLON.Vector3(p.rightHand.pos.x, p.rightHand.pos.y, p.rightHand.pos.z)
+      );
+
+      rightHandAnchor.position.copyFrom(localRightPos);
+      rightHandAnchor.position.y += 0.2;
       rightHandAnchor.rotationQuaternion = quatFrom(p.rightHand.rot);
     }
   }
@@ -602,10 +638,8 @@ async function unlockAudio() {
   }
 }
 
-
 window.addEventListener("click", unlockAudio, { once: true });
 window.addEventListener("touchstart", unlockAudio, { once: true });
-
 
 async function main() {
   try {
@@ -664,13 +698,13 @@ async function main() {
     lastSend = now;
 
     const cam = scene.activeCamera;
-    const pos = scene.playerMesh 
-      ? scene.playerMesh.position 
+    const pos = scene.playerMesh
+      ? scene.playerMesh.position
       : cam.position;
 
     const headWorld = cam.globalPosition;
-     let headPos = { x: headWorld.x, y: headWorld.y, z: headWorld.z };
-     let headRot = { x: 0, y: 0, z: 0, w: 1 };
+    let headPos = { x: headWorld.x, y: headWorld.y, z: headWorld.z };
+    let headRot = { x: 0, y: 0, z: 0, w: 1 };
 
     if (cam.rotationQuaternion) {
       headRot = {
@@ -708,45 +742,53 @@ async function main() {
         rot: { x: crot.x, y: crot.y, z: crot.z, w: crot.w },
       };
 
-      if (handedness === "left") leftHand = tracked;
-      if (handedness === "right") rightHand = tracked;
+      if (handedness === "left") rightHand = tracked;
+      if (handedness === "right") leftHand = tracked;
     }
 
     if (localAvatarParts) {
-  localAvatarParts.root.rotation.y = extractYaw(cam);
+      localAvatarParts.root.rotation.set(0, 0, 0);
 
-  if (localAvatarParts.bodyAnchor) {
-    localAvatarParts.bodyAnchor.position.set(0, 0, 0);
-    localAvatarParts.bodyAnchor.rotation.set(0, 0, 0);
-  }
+      if (localAvatarParts.bodyAnchor) {
+        localAvatarParts.bodyAnchor.position.set(0, 0, 0);
+        localAvatarParts.bodyAnchor.rotation.set(0, extractYaw(cam), 0);
+      }
 
-  if (localAvatarParts.headAnchor) {
-    localAvatarParts.headAnchor.position= vec3From({
-      x: headPos.x - pos.x,
-      y: headPos.y - pos.y - 1,
-      z: headPos.z - pos.z,
-    });
-    localAvatarParts.headAnchor.rotationQuaternion = quatFrom(headRot);
-  }
+      const rootWorld = localAvatarParts.root;
 
-  if (localAvatarParts.leftHandAnchor) {
-    localAvatarParts.leftHandAnchor.position = vec3From({
-      x: leftHand.pos.x - pos.x,
-      y: leftHand.pos.y - pos.y + 0.2,
-      z: leftHand.pos.z - pos.z,
-    });
-    localAvatarParts.leftHandAnchor.rotationQuaternion = quatFrom(leftHand.rot);
-  }
+      if (localAvatarParts.headAnchor) {
+        const localHeadPos = worldToLocalPosition(
+          rootWorld,
+          new BABYLON.Vector3(headPos.x, headPos.y, headPos.z)
+        );
 
-  if (localAvatarParts.rightHandAnchor) {
-    localAvatarParts.rightHandAnchor.position = vec3From({
-      x: rightHand.pos.x - pos.x,
-      y: rightHand.pos.y - pos.y + 0.2,
-      z: rightHand.pos.z - pos.z,
-    });
-    localAvatarParts.rightHandAnchor.rotationQuaternion = quatFrom(rightHand.rot);
-  }
-}
+        localAvatarParts.headAnchor.position.copyFrom(localHeadPos);
+        localAvatarParts.headAnchor.position.y += -1.0;
+        localAvatarParts.headAnchor.rotationQuaternion = quatFrom(headRot);
+      }
+
+      if (localAvatarParts.leftHandAnchor) {
+        const localLeftPos = worldToLocalPosition(
+          rootWorld,
+          new BABYLON.Vector3(leftHand.pos.x, leftHand.pos.y, leftHand.pos.z)
+        );
+
+        localAvatarParts.leftHandAnchor.position.copyFrom(localLeftPos);
+        localAvatarParts.leftHandAnchor.position.y += 0.2;
+        localAvatarParts.leftHandAnchor.rotationQuaternion = quatFrom(leftHand.rot);
+      }
+
+      if (localAvatarParts.rightHandAnchor) {
+        const localRightPos = worldToLocalPosition(
+          rootWorld,
+          new BABYLON.Vector3(rightHand.pos.x, rightHand.pos.y, rightHand.pos.z)
+        );
+
+        localAvatarParts.rightHandAnchor.position.copyFrom(localRightPos);
+        localAvatarParts.rightHandAnchor.position.y += 0.2;
+        localAvatarParts.rightHandAnchor.rotationQuaternion = quatFrom(rightHand.rot);
+      }
+    }
 
     socket.emit("pose", {
       name: playerName,

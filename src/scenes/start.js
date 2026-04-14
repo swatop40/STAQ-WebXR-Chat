@@ -57,44 +57,21 @@ export async function startScene(engine) {
   cam.inputs.add(new BABYLON.FreeCameraMouseInput());
   cam.attachControl(canvas, true);
 
-  scene._movementKeys = {
-    w: false,
-    a: false,
-    s: false,
-    d: false,
-    ArrowUp: false,
-    ArrowDown: false,
-    ArrowLeft: false,
-    ArrowRight: false
-};
-
-window.addEventListener("keydown", (e) => {
-    if (scene._movementKeys.hasOwnProperty(e.key)) {
-        scene._movementKeys[e.key] = true;
-    }
-});
-
-window.addEventListener("keyup", (e) => {
-    if (scene._movementKeys.hasOwnProperty(e.key)) {
-        scene._movementKeys[e.key] = false;
-    }
-});
-
   new HemisphericLight("light", new Vector3(0, 2, 0), scene);
 
   const box = MeshBuilder.CreateBox("box", { size: 0.5 }, scene);
   box.position = new Vector3(0, 1, 0);
 
   const mirror = MeshBuilder.CreatePlane("mirror", { width: 4.5, height: 7.2 }, scene);
-  mirror.position = new Vector3(7.29, 1, 11); // example
+  mirror.position = new Vector3(7.29, 1, 11);
 
   const ground = MeshBuilder.CreateGround("ground", { width: 20, height: 20 }, scene);
   ground.position.y = -0;
 
-// Desktop teleport marker
+  // Desktop teleport marker
   const teleportMarker = MeshBuilder.CreateDisc("teleportMarker", { radius: 0.3 }, scene);
-    teleportMarker.rotation.x = Math.PI / 2;
-    teleportMarker.isVisible = false;
+  teleportMarker.rotation.x = Math.PI / 2;
+  teleportMarker.isVisible = false;
 
   const room = await SceneLoader.ImportMeshAsync(null, "/scene-models/", "test-room.glb", scene);
   console.log("Imported meshes:", room.meshes.map((m) => m.name));
@@ -264,45 +241,49 @@ window.addEventListener("keyup", (e) => {
   const body = playerMesh.physicsImpostor.physicsBody;
   if (body && body.angularFactor) {
     body.angularFactor.set(0, 0, 0);
-}
+  }
 
   scene.playerMesh = playerMesh;
 
-// Desktop teleport preview (mouse hover)
+  // Desktop teleport preview (mouse hover)
   scene.onPointerMove = function (evt, pickInfo) {
     if (!pickInfo.hit) {
-        teleportMarker.isVisible = false;
-        return;
+      teleportMarker.isVisible = false;
+      return;
     }
 
     if (pickInfo.pickedMesh === ground) {
-        teleportMarker.position.copyFrom(pickInfo.pickedPoint);
-        teleportMarker.isVisible = true;
+      teleportMarker.position.copyFrom(pickInfo.pickedPoint);
+      teleportMarker.isVisible = true;
     } else {
-        teleportMarker.isVisible = false;
+      teleportMarker.isVisible = false;
     }
-};
+  };
 
-scene.onPointerDown = function (evt, pickInfo) {
-    if (evt.button !== 0) return; 
+  // Desktop click-to-teleport
+  scene.onPointerDown = function (evt, pickInfo) {
+    if (evt.button !== 0) return;
     if (!pickInfo.hit) return;
 
     if (pickInfo.pickedMesh === ground) {
-        const target = pickInfo.pickedPoint.clone();
-        target.y += 1.7;
+      const target = pickInfo.pickedPoint.clone();
+      target.y += 1.7;
 
-        // Move player mesh
-        scene.playerMesh.position.copyFrom(target);
+      scene.playerMesh.position.copyFrom(target);
+
+      if (scene.playerMesh.physicsImpostor) {
+        scene.playerMesh.physicsImpostor.setLinearVelocity(Vector3.Zero());
+        scene.playerMesh.physicsImpostor.setAngularVelocity(Vector3.Zero());
+      }
     }
-};
+  };
 
+  const xr = await scene.createDefaultXRExperienceAsync({
+    uiOptions: { sessionMode: "immersive-vr" },
+    floorMeshes: [ground],
+  });
 
- const xr = await scene.createDefaultXRExperienceAsync({
-  uiOptions: { sessionMode: "immersive-vr" },
-  floorMeshes: [ground],
-});
-
- scene.xrHelper = xr;
+  scene.xrHelper = xr;
 
   const fm = xr.baseExperience.featuresManager;
 
@@ -315,18 +296,11 @@ scene.onPointerDown = function (evt, pickInfo) {
       renderingGroupId: 1,
       parabolicRayEnabled: false,
     }
-);
+  );
 
-xr.teleportation = VRteleportation;
-
+  xr.teleportation = VRteleportation;
 
   try {
-   // fm.enableFeature(WebXRFeatureName.MOVEMENT, "stable", {
-    //  xrInput: xr.input,
-     // movementOrientationFollowsViewerPose: true,
-     // movementSpeed: 0.25,
-     // rotationSpeed: 0.25,
-    //});
     console.log("[XR] Smooth movement enabled");
   } catch (e) {
     console.error("[XR] Movement feature failed:", e);
@@ -346,9 +320,9 @@ xr.teleportation = VRteleportation;
   const mirrorTex = new MirrorTexture("mirrorTex", 256, scene, true);
 
   mirrorTex.mirrorPlane = new Plane(0, 0, 1, -mirror.position.z);
-  mirrorTex.refreshRate = 2; 
+  mirrorTex.refreshRate = 2;
 
-  mirrorTex.renderList = scene.meshes.filter(m => m !== mirror);
+  mirrorTex.renderList = scene.meshes.filter((m) => m !== mirror);
 
   mirrorMat.reflectionTexture = mirrorTex;
   mirrorMat.diffuseColor = new Color3(0.1, 0.1, 0.1);
@@ -359,112 +333,62 @@ xr.teleportation = VRteleportation;
   scene.mirrorTex = mirrorTex;
   scene.mirrorMesh = mirror;
 
-
-scene.onBeforeRenderObservable.add(() => {
+  scene.onBeforeRenderObservable.add(() => {
     if (!scene.playerMesh || !scene.activeCamera) return;
 
     const cam = scene.activeCamera;
     const mesh = scene.playerMesh;
 
-    
     mesh.position.x = cam.globalPosition.x;
     mesh.position.z = cam.globalPosition.z;
 
     cam.position.y = playerHeight * 0.5;
-});
-
-const moveVec = new Vector3(0, 0, 0);
-
-scene.onBeforeRenderObservable.add(() => {
-    if (!scene.playerMesh) return;
-
-    const mesh = scene.playerMesh;
-
-    // Desktop movement (WASD)
-   const keys = scene._movementKeys;
-
-    let inputX = 0;
-    let inputZ = 0;
-
-    if (keys.w || keys.ArrowUp) inputZ += 1;
-    if (keys.s || keys.ArrowDown) inputZ -= 1;
-    if (keys.a || keys.ArrowLeft) inputX -= 1;
-    if (keys.d || keys.ArrowRight) inputX += 1;
-
-    if (inputX !== 0 || inputZ !== 0) {
-
-        // Get camera directions
-        const forward = cam.getDirection(new BABYLON.Vector3(0, 0, 1));
-        const right   = cam.getDirection(new BABYLON.Vector3(1, 0, 0));
-
-        // Flatten to horizontal plane
-        forward.y = 0;
-        right.y = 0;
-
-        forward.normalize();
-        right.normalize();
-
-        // Combine input with camera directions
-        const move = forward.scale(inputZ).add(right.scale(inputX));
-
-        const speed = .75; // Adjust as needed;
-
-        mesh.physicsImpostor.setLinearVelocity(
-            new BABYLON.Vector3(
-                move.x * speed,
-                mesh.physicsImpostor.getLinearVelocity().y,
-                move.z * speed
-            )
-        );
-    }
 
     const body = mesh.physicsImpostor.physicsBody;
     if (body) {
-        body.angularVelocity.set(0, 0, 0);
+      body.angularVelocity.set(0, 0, 0);
     }
-    
-});
+  });
 
-// Create host mesh FIRST
-const menuHost = BABYLON.MeshBuilder.CreateBox("menuHost", { size: 0.01 }, scene);
-  menuHost.isVisible = false; // turn true for debugging
+  // Create host mesh FIRST
+  const menuHost = BABYLON.MeshBuilder.CreateBox("menuHost", { size: 0.01 }, scene);
+  menuHost.isVisible = false;
   menuHost.rotationQuaternion = new BABYLON.Quaternion();
 
-// Create GUI manager
-const guiManager = new BABYLON.GUI.GUI3DManager(scene);
+  // Create GUI manager
+  const guiManager = new BABYLON.GUI.GUI3DManager(scene);
 
-// Create panel
-const menuPanel = new BABYLON.GUI.StackPanel3D();
-guiManager.addControl(menuPanel);
+  // Create panel
+  const menuPanel = new BABYLON.GUI.StackPanel3D();
+  guiManager.addControl(menuPanel);
 
-// Link panel to host
-menuPanel.linkToTransformNode(menuHost);
+  // Link panel to host
+  menuPanel.linkToTransformNode(menuHost);
 
-// Hide panel initially
-menuPanel.isVisible = false;
-menuPanel.margin = 0.2;
+  // Hide panel initially
+  menuPanel.isVisible = false;
+  menuPanel.margin = 0.2;
 
-// Add buttons
-function addMenuButton(text, callback) {
+  // Add buttons
+  function addMenuButton(text, callback) {
     const button = new BABYLON.GUI.HolographicButton(text + "_btn");
     menuPanel.addControl(button);
     button.text = text;
     button.onPointerUpObservable.add(callback);
     return button;
-}
+  }
 
-addMenuButton("Switch Environment", () => console.log("Switch environment clicked"));
-addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
-addMenuButton("Exit Website", () => window.location.href = "https://google.com");
+  addMenuButton("Switch Environment", () => console.log("Switch environment clicked"));
+  addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
+  addMenuButton("Exit Website", () => window.location.href = "https://google.com");
 
-const closeBtn = new BABYLON.GUI.HolographicButton("close_btn");
-menuPanel.addControl(closeBtn);
-closeBtn.text = "X";
-closeBtn.onPointerUpObservable.add(() => menuPanel.isVisible = false);
+  const closeBtn = new BABYLON.GUI.HolographicButton("close_btn");
+  menuPanel.addControl(closeBtn);
+  closeBtn.text = "X";
+  closeBtn.onPointerUpObservable.add(() => (menuPanel.isVisible = false));
 
-
-//Show menu by moving the HOST
-function showMenu() {
+  // Show menu by moving the HOST
+  function showMenu() {
     console.log("showMenu() called");
 
     const cam = scene.activeCamera;
@@ -478,24 +402,23 @@ function showMenu() {
     // Rotate host to face camera
     const lookDir = cam.position.subtract(menuHost.position).normalize();
     menuHost.rotationQuaternion = BABYLON.Quaternion.FromLookDirectionLH(
-        lookDir,
-        BABYLON.Vector3.Up()
+      lookDir,
+      BABYLON.Vector3.Up()
     );
 
     menuPanel.isVisible = true;
-}
+  }
 
-// 8. Toggle with ESC
-window.addEventListener("keydown", (e) => {
+  // Toggle with ESC
+  window.addEventListener("keydown", (e) => {
     console.log("Key pressed:", e.key);
 
     if (e.key === "Escape") {
-        console.log("Toggling menu visibility");
-        menuPanel.isVisible = !menuPanel.isVisible;
-        if (menuPanel.isVisible) showMenu();
+      console.log("Toggling menu visibility");
+      menuPanel.isVisible = !menuPanel.isVisible;
+      if (menuPanel.isVisible) showMenu();
     }
-});
-
+  });
 
   await scene.whenReadyAsync();
 
