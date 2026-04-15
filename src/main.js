@@ -36,6 +36,27 @@ const remoteNameLabels = new Map();
 let localStream = null;
 const peerConnections = new Map();
 const remoteAudioEls = new Map();
+const remoteSounds = new Map();
+const readySpatialSounds = new Set();
+
+function cleanupRemoteAudio(playerId) {
+  const audioEl = remoteAudioEls.get(playerId);
+  if (audioEl) {
+    audioEl.pause();
+    audioEl.srcObject = null;
+    audioEl.remove();
+    remoteAudioEls.delete(playerId);
+  }
+
+  const sound = remoteSounds.get(playerId);
+  if (sound) {
+    sound.stop();
+    sound.dispose();
+    remoteSounds.delete(playerId);
+  }
+
+  readySpatialSounds.delete(playerId);
+}
 
 function addAvatarToMirror(scene, root) {
   const mirrorTex = scene?.mirrorTex;
@@ -341,6 +362,8 @@ function createPeerConnection(targetId) {
   const existing = peerConnections.get(targetId);
   if (existing) return existing;
 
+  cleanupRemoteAudio(targetId);
+
   const pc = new RTCPeerConnection({
     iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
   });
@@ -377,26 +400,64 @@ function createPeerConnection(targetId) {
     console.log("[VOICE] ontrack stream count:", event.streams.length);
     console.log("[VOICE] ontrack kind:", event.track?.kind);
 
-    let audio = remoteAudioEls.get(targetId);
-    if (!audio) {
-      audio = document.createElement("audio");
-      audio.autoplay = true;
-      audio.playsInline = true;
-      audio.controls = false;
-      audio.style.display = "none";
-      document.body.appendChild(audio);
-      remoteAudioEls.set(targetId, audio);
-    }
+    const stream = event.streams[0];
+  if (!stream) return;
 
-    audio.srcObject = event.streams[0];
+  cleanupRemoteAudio(targetId);
 
-    try {
-      await audio.play();
-      console.log("[VOICE] Playback started for:", targetId);
-    } catch (err) {
-      console.error("[VOICE] audio.play() failed for:", targetId, err);
+  const audio = document.createElement("audio");
+  audio.autoplay = true;
+  audio.playsInline = true;
+  audio.controls = false;
+  audio.style.display = "none";
+  audio.srcObject = stream;
+  document.body.appendChild(audio);
+  remoteAudioEls.set(targetId, audio);
+
+  const sound = new BABYLON.Sound(
+    `voice_${targetId}`,
+    audio,
+    sceneRef,
+     () => {
+      readySpatialSounds.add(targetId);
+      console.log("[VOICE] sound ready for:", targetId);
+
+      const remoteMesh = remoteMeshes.get(targetId);
+      if (remoteMesh) {
+        sound.attachToMesh(remoteMesh);
+        console.log(
+          "[VOICE] attached to mesh:",
+          targetId,
+          "pos:",
+          remoteMesh.position.x,
+          remoteMesh.position.y,
+          remoteMesh.position.z
+        );
+      } else {
+        console.warn("[VOICE] remote mesh not ready yet for:", targetId);
+      }
+    },
+    {
+      loop: true,
+      autoplay: true,
+      spatialSound: true,
+      streaming: true,
+      distanceModel: "linear",
+      maxDistance: 20,
+      rolloffFactor: 2
     }
-  };
+  );
+
+  remoteSounds.set(targetId, sound);
+  console.log("[VOICE] sound created for:", targetId);
+
+  try {
+    await audio.play();
+    console.log("[VOICE] Playback started for:", targetId);
+  } catch (err) {
+    console.error("[VOICE] audio.play() failed for:", targetId, err);
+  }
+};
 
   pc.onconnectionstatechange = () => {
     console.log(`[VOICE] ${targetId} state:`, pc.connectionState);
@@ -433,6 +494,13 @@ socket.on("playerJoined", async (p) => {
 
   await ensureRemoteMesh(sceneRef, p.id);
 
+  const existingSound = remoteSounds.get(p.id);
+  const existingMesh = remoteMeshes.get(p.id);
+  if (existingSound && existingMesh) {
+    existingSound.attachToMesh(existingMesh);
+    console.log("[VOICE] late attach after playerJoined:", p.id);
+  }
+
   try {
     const pc = createPeerConnection(p.id);
     if (!pc) return;
@@ -456,6 +524,7 @@ socket.on("playerJoined", async (p) => {
 socket.on("playerLeft", (id) => {
   console.log("[NET] playerLeft:", id);
   removeRemoteMesh(id);
+  cleanupRemoteAudio(id);
   removePeerConnection(id);
 });
 
@@ -472,6 +541,16 @@ socket.on("playersUpdate", async (players) => {
       if (!mesh) continue;
     }
 
+    const existingSound = remoteSounds.get(id);
+if (existingSound && readySpatialSounds.has(id)) {
+  try {
+    existingSound.attachToMesh(mesh);
+    console.log("[VOICE] late attach success:", id);
+  } catch (err) {
+    console.warn("[VOICE] late attach failed:", id, err);
+  }
+}
+
     ensureRemoteNameLabel(id, mesh, p.name || "Player");
 
     mesh.position.set(
@@ -479,6 +558,16 @@ socket.on("playersUpdate", async (players) => {
       (p.root?.pos?.y ?? 0) - 1.6,
       p.root?.pos?.z ?? 0
     );
+
+    console.log(
+  "[VOICE] mesh moving:",
+  id,
+  "pos:",
+  mesh.position.x,
+  mesh.position.y,
+  mesh.position.z
+);
+
     mesh.rotation.y = p.root?.rotY ?? 0;
 
     const bodyAnchor = mesh.metadata?.bodyAnchor;
