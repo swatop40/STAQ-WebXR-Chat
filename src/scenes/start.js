@@ -174,13 +174,6 @@ export async function startScene(engine) {
       scene
     )
   );
-  walls[1].position.set(0, wallHeight / 2, -wallLength / 2);
-  walls[1].physicsImpostor = new PhysicsImpostor(
-    walls[1],
-    PhysicsImpostor.BoxImpostor,
-    { mass: 0, restitution: 0.2, friction: 0.8 },
-    scene
-  );
 
   walls.push(
     MeshBuilder.CreateBox(
@@ -380,45 +373,55 @@ export async function startScene(engine) {
 
   addMenuButton("Switch Environment", () => console.log("Switch environment clicked"));
   addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
-  addMenuButton("Exit Website", () => window.location.href = "https://google.com");
+  addMenuButton("Exit Website", () => {
+    const answer = window.confirm("Are you sure you want to leave this scene?");
+    if (answer) {
+        window.location.href = "https://google.com";
+    }
+});
 
   const closeBtn = new BABYLON.GUI.HolographicButton("close_btn");
   menuPanel.addControl(closeBtn);
-  closeBtn.text = "X";
-  closeBtn.onPointerUpObservable.add(() => (menuPanel.isVisible = false));
+  closeBtn.text = "Close The Menu";
+  closeBtn.onPointerUpObservable.add(() => {
+  menuPanel.isVisible = false;
+  menuHost.position.set(9999, 9999, 9999);
+  });
 
   // Show menu by moving the HOST
   function showMenu() {
     console.log("showMenu() called");
 
     const cam = scene.activeCamera;
-
-    // Position host 1 meter in front of camera
-    const forward = cam.getDirection(new BABYLON.Vector3(0, 0, 1));
-    const pos = cam.position.add(forward.scale(1));
-
+    const camPos = cam.globalPosition.clone();
+    const forward = cam.getDirection(BABYLON.Axis.Z).normalize();
+    const pos = camPos.add(forward.scale(3));
     menuHost.position.copyFrom(pos);
-
-    // Rotate host to face camera
-    const lookDir = cam.position.subtract(menuHost.position).normalize();
+    const lookDir = camPos.subtract(menuHost.position).normalize();
     menuHost.rotationQuaternion = BABYLON.Quaternion.FromLookDirectionLH(
       lookDir,
-      BABYLON.Vector3.Up()
+      BABYLON.Axis.Y
     );
 
-    menuPanel.isVisible = true;
-  }
+  menuPanel.isVisible = true;
+}
 
   // Toggle with ESC
   window.addEventListener("keydown", (e) => {
-    console.log("Key pressed:", e.key);
+  console.log("Key pressed:", e.key);
 
-    if (e.key === "Escape") {
-      console.log("Toggling menu visibility");
-      menuPanel.isVisible = !menuPanel.isVisible;
-      if (menuPanel.isVisible) showMenu();
+  if (e.key === "Escape") {
+    if (menuPanel.isVisible) {
+      menuPanel.isVisible = false;
+
+      // Move that thing so far away no one will know
+      menuHost.position.set(9999, 9999, 9999);
+    } else {
+
+      showMenu();
     }
-  });
+  }
+});
 
   await scene.whenReadyAsync();
 
