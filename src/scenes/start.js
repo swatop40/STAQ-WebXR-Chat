@@ -45,7 +45,13 @@ export async function startScene(engine) {
   const scene = new Scene(engine);
   const desktopKeys = new Set();
   const XR_WORLD_SCALE_FACTOR = 1.9;
-  let xrMode = "teleport";
+  let xrMode = "smooth";
+  const PLAYER_SPAWN = new Vector3(0.25, 0.9, -8);
+  const XR_SPAWN_FLOOR = new Vector3(
+    PLAYER_SPAWN.x / XR_WORLD_SCALE_FACTOR,
+    0,
+    PLAYER_SPAWN.z / XR_WORLD_SCALE_FACTOR
+  );
 
   scene.enablePhysics(
     new Vector3(0, -9.81, 0),
@@ -218,7 +224,7 @@ export async function startScene(engine) {
   );
 
   playerMesh.isVisible = false;
-  playerMesh.position = new Vector3(0.25, 2, -8);
+  playerMesh.position.copyFrom(PLAYER_SPAWN);
 
   cam.parent = playerMesh;
   cam.position = new Vector3(0, playerHeight * 0.5, 0);
@@ -239,11 +245,12 @@ export async function startScene(engine) {
 
   scene.navigation = {
     desktopMode: "smooth",
-    xrMode: "teleport",
+    xrMode: "smooth",
     toggleXRMode() {
       xrMode = xrMode === "teleport" ? "smooth" : "teleport";
       this.xrMode = xrMode;
       console.log(`[NAV] XR mode: ${xrMode}`);
+      return xrMode;
     },
   };
 
@@ -253,11 +260,25 @@ export async function startScene(engine) {
   });
 
   scene.xrHelper = xr;
+  const xrOrigin = new BABYLON.TransformNode("xrOrigin", scene);
+  xrOrigin.position.copyFrom(XR_SPAWN_FLOOR);
+  scene.xrOrigin = xrOrigin;
+
+  xr.baseExperience.onInitialXRPoseSetObservable.add((xrCamera) => {
+    xrCamera.position.set(XR_SPAWN_FLOOR.x, xrCamera.position.y, XR_SPAWN_FLOOR.z);
+    xrOrigin.position.copyFromFloats(xrCamera.globalPosition.x, 0, xrCamera.globalPosition.z);
+  });
+
   xr.baseExperience.onStateChangedObservable.add((state) => {
     if (state === BABYLON.WebXRState.IN_XR) {
       xr.baseExperience.sessionManager.worldScalingFactor = XR_WORLD_SCALE_FACTOR;
+      const xrCamera = xr.baseExperience.camera;
+      xrCamera.position.set(XR_SPAWN_FLOOR.x, xrCamera.position.y, XR_SPAWN_FLOOR.z);
+      xrOrigin.position.copyFromFloats(xrCamera.globalPosition.x, 0, xrCamera.globalPosition.z);
     } else if (state === BABYLON.WebXRState.NOT_IN_XR) {
       xr.baseExperience.sessionManager.worldScalingFactor = 1;
+      scene.playerMesh.position.copyFrom(PLAYER_SPAWN);
+      xrOrigin.position.copyFrom(XR_SPAWN_FLOOR);
     }
   });
 
@@ -276,6 +297,18 @@ export async function startScene(engine) {
 
   xr.teleportation = VRteleportation;
 
+  function applyXRMovementMode() {
+    if (xrMode === "smooth") {
+      xr.teleportation?.detach();
+    } else {
+      xr.teleportation?.attach();
+    }
+
+    console.log(`[XR] Applied movement mode: ${xrMode}`);
+  }
+
+  applyXRMovementMode();
+
   try {
     console.log("[XR] Smooth movement enabled");
   } catch (e) {
@@ -293,12 +326,25 @@ export async function startScene(engine) {
   }
 
   const mirrorMat = new StandardMaterial("mirrorMat", scene);
-  const mirrorTex = new MirrorTexture("mirrorTex", 1048, scene, true);
+  const mirrorTex = new MirrorTexture("mirrorTex", 1024, scene, true);
 
-  mirrorTex.mirrorPlane = new Plane(0, 0, 1, -mirror.position.z);
+  function updateMirrorPlane() {
+    const world = mirror.computeWorldMatrix(true);
+    const mirrorOrigin = world.getTranslation();
+    const mirrorNormal = Vector3.TransformNormal(Vector3.Forward(), world).normalize();
+    mirrorTex.mirrorPlane = Plane.FromPositionAndNormal(mirrorOrigin, mirrorNormal);
+  }
+
+  updateMirrorPlane();
   mirrorTex.refreshRate = 2;
 
-  mirrorTex.renderList = scene.meshes.filter((m) => m !== mirror);
+  mirrorTex.renderList = scene.meshes.filter(
+    (m) => m !== mirror && m.name !== "player" && m.name !== "menuHost"
+  );
+
+  if (!scene.customRenderTargets.includes(mirrorTex)) {
+    scene.customRenderTargets.push(mirrorTex);
+  }
 
   mirrorMat.reflectionTexture = mirrorTex;
   mirrorMat.diffuseColor = new Color3(0.1, 0.1, 0.1);
@@ -310,9 +356,13 @@ export async function startScene(engine) {
   scene.mirrorMesh = mirror;
 
   scene.onBeforeRenderObservable.add(() => {
+    updateMirrorPlane();
+
     if (!scene.playerMesh || !scene.activeCamera) return;
 
     const inXR = scene.xrHelper?.baseExperience?.state === BABYLON.WebXRState.IN_XR;
+    mirrorTex.refreshRate = inXR ? 1 : 2;
+
     if (inXR) {
       if (xrMode === "smooth") {
         const xrCamera = scene.xrHelper.baseExperience.camera;
@@ -354,6 +404,9 @@ export async function startScene(engine) {
           if (move.lengthSquared() > 0.0001) {
             move.normalize().scaleInPlace(moveSpeed * dt);
             xrCamera.position.addInPlace(move);
+            if (scene.xrOrigin) {
+              scene.xrOrigin.position.addInPlaceFromFloats(move.x, 0, move.z);
+            }
           }
         }
       }
@@ -409,73 +462,185 @@ export async function startScene(engine) {
   // Create host mesh FIRST
   const menuHost = BABYLON.MeshBuilder.CreateBox("menuHost", { size: 0.01 }, scene);
   menuHost.isVisible = false;
-  menuHost.rotationQuaternion = new BABYLON.Quaternion();
+  menuHost.rotationQuaternion = BABYLON.Quaternion.Identity();
+  menuHost.scaling = new Vector3(0.64, 0.64, 0.64);
+  menuHost.setEnabled(false);
   let menuVisible = false;
+  let menuAnchorRoot = null;
+  const menuActivator = MeshBuilder.CreateSphere(
+    "menuActivator",
+    { diameter: 0.09, segments: 12 },
+    scene
+  );
+  const menuActivatorMat = new StandardMaterial("menuActivatorMat", scene);
+  menuActivatorMat.diffuseColor = new Color3(0.13, 0.47, 0.91);
+  menuActivatorMat.emissiveColor = new Color3(0.08, 0.22, 0.42);
+  menuActivatorMat.specularColor = new Color3(0, 0, 0);
+  menuActivator.material = menuActivatorMat;
+  menuActivator.isVisible = false;
+  menuActivator.isPickable = true;
+  menuActivator.isNearPickable = false;
+  menuActivator.actionManager = new BABYLON.ActionManager(scene);
 
-  // Create GUI manager
-  const guiManager = new BABYLON.GUI.GUI3DManager(scene);
+  const menuBoard = MeshBuilder.CreatePlane(
+    "menuBoard",
+    { width: 1.98, height: 0.42, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+    scene
+  );
+  menuBoard.parent = menuHost;
+  menuBoard.position.z = 0.02;
+  menuBoard.isPickable = true;
+  menuBoard.setEnabled(false);
 
-  // Create panel
-  const menuPanel = new BABYLON.GUI.StackPanel3D();
-  guiManager.addControl(menuPanel);
+  const menuTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateForMesh(
+    menuBoard,
+    3328,
+    960,
+    false
+  );
 
-  // Link panel to host
-  menuPanel.linkToTransformNode(menuHost);
+  const menuCard = new BABYLON.GUI.Rectangle("menuCard");
+  menuCard.width = "99.2%";
+  menuCard.height = "90%";
+  menuCard.thickness = 3;
+  menuCard.cornerRadius = 28;
+  menuCard.color = "#bfd0df";
+  menuCard.background = "#0d1a29F2";
+  menuTexture.addControl(menuCard);
 
-  // Hide panel initially
-  menuPanel.isVisible = false;
-  menuPanel.margin = 0.2;
+  const menuPanel = new BABYLON.GUI.Grid("menuGrid");
+  menuPanel.width = "97%";
+  menuPanel.height = "86%";
+  menuPanel.horizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  menuPanel.verticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  for (let i = 0; i < 6; i += 1) {
+    menuPanel.addColumnDefinition(1 / 6);
+  }
+  menuPanel.addRowDefinition(1);
+  menuCard.addControl(menuPanel);
 
-  // Add buttons
+  let menuButtonIndex = 0;
+
   function addMenuButton(text, callback) {
-    const button = new BABYLON.GUI.HolographicButton(text + "_btn");
-    menuPanel.addControl(button);
-    button.text = text;
+    const button = BABYLON.GUI.Button.CreateSimpleButton(`${text}_btn`, text);
+    button.width = "95%";
+    button.height = "96%";
+    button.thickness = 2;
+    button.cornerRadius = 18;
+    button.color = "white";
+    button.background = "#4e6f8d";
+    button.fontSize = 72;
+    button.fontFamily = "Arial";
+    button.paddingLeft = "6px";
+    button.paddingRight = "6px";
+    button.textBlock.textWrapping = true;
+    button.textBlock.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+    button.textBlock.textVerticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_CENTER;
     button.onPointerUpObservable.add(callback);
+    menuPanel.addControl(button, 0, menuButtonIndex);
+    menuButtonIndex += 1;
     return button;
   }
 
+  addMenuButton("Emotes", () => console.log("Open emotes clicked"));
   addMenuButton("Switch Environment", () => console.log("Switch environment clicked"));
   addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
+  addMenuButton("Settings", () => {
+    const nextMode = scene.navigation.toggleXRMode();
+    applyXRMovementMode();
+    console.log(`[SETTINGS] XR locomotion set to ${nextMode}`);
+  });
   addMenuButton("Exit Website", () => {
     const answer = window.confirm("Are you sure you want to leave this scene?");
     if (answer) {
       window.location.href = "https://google.com";
     }
   });
-
-  const closeBtn = new BABYLON.GUI.HolographicButton("close_btn");
-  menuPanel.addControl(closeBtn);
-  closeBtn.text = "Close The Menu";
-  closeBtn.onPointerUpObservable.add(() => {
+  addMenuButton("Close The Menu", () => {
     hideMenu();
   });
 
-  function placeMenuInFrontOfCamera(distance = 1.6) {
-    const cam = scene.activeCamera;
+  function getMenuCamera() {
+    const inXR = scene.xrHelper?.baseExperience?.state === BABYLON.WebXRState.IN_XR;
+    return inXR ? scene.xrHelper?.baseExperience?.camera ?? scene.activeCamera : scene.activeCamera;
+  }
+
+  function getMenuAnchorNode() {
+    const inXR = scene.xrHelper?.baseExperience?.state === BABYLON.WebXRState.IN_XR;
+    if (inXR) {
+      return scene.xrOrigin || scene.xrHelper?.baseExperience?.camera || scene.activeCamera;
+    }
+    return scene.playerMesh || scene.activeCamera;
+  }
+
+  function worldToLocalPosition(node, worldPos) {
+    const inv = node.getWorldMatrix().clone();
+    inv.invert();
+    return BABYLON.Vector3.TransformCoordinates(worldPos, inv);
+  }
+
+  function placeMenuInFrontOfCamera(attachToRoot = false) {
+    const cam = getMenuCamera();
     if (!cam) return;
 
+    const inXR = scene.xrHelper?.baseExperience?.state === BABYLON.WebXRState.IN_XR;
+    const distance = inXR ? 1.72 : 1.85;
+    const verticalOffset = inXR ? -0.5 : -0.54;
+    const hostScale = inXR ? 0.78 : 0.9;
+
+    menuHost.scaling.set(hostScale, hostScale, hostScale);
+    menuHost.parent = null;
+
     const camPos = cam.globalPosition.clone();
-    const forward = cam.getDirection(BABYLON.Axis.Z).normalize();
-    const pos = camPos.add(forward.scale(distance));
+    const forward = cam.getDirection(BABYLON.Axis.Z);
+    forward.y = 0;
+    if (forward.lengthSquared() > 0.0001) {
+      forward.normalize();
+    } else {
+      forward.copyFromFloats(0, 0, 1);
+    }
+
+    const pos = camPos.add(forward.scale(distance)).add(new BABYLON.Vector3(0, verticalOffset, 0));
     menuHost.position.copyFrom(pos);
-    const lookDir = camPos.subtract(menuHost.position).normalize();
+
+    const lookDir = camPos.subtract(menuHost.position);
+    lookDir.y = 0;
+    if (lookDir.lengthSquared() > 0.0001) {
+      lookDir.normalize();
+    } else {
+      lookDir.copyFromFloats(0, 0, -1);
+    }
+
     menuHost.rotationQuaternion = BABYLON.Quaternion.FromLookDirectionLH(
       lookDir,
-      BABYLON.Axis.Y
+      BABYLON.Vector3.Up()
     );
+
+    if (attachToRoot) {
+      menuAnchorRoot = getMenuAnchorNode();
+      if (menuAnchorRoot) {
+        const worldPos = menuHost.position.clone();
+        const worldRot = menuHost.rotationQuaternion.clone();
+        menuHost.parent = menuAnchorRoot;
+        menuHost.position.copyFrom(worldToLocalPosition(menuAnchorRoot, worldPos));
+        menuHost.rotationQuaternion = worldRot;
+      }
+    }
   }
 
   function showMenu() {
-    placeMenuInFrontOfCamera();
-    menuPanel.isVisible = true;
+    menuHost.setEnabled(true);
+    placeMenuInFrontOfCamera(true);
+    menuBoard.setEnabled(true);
     menuVisible = true;
   }
 
   function hideMenu() {
-    menuPanel.isVisible = false;
+    menuBoard.setEnabled(false);
     menuVisible = false;
-    menuHost.position.set(9999, 9999, 9999);
+    menuAnchorRoot = null;
+    menuHost.parent = null;
+    menuHost.setEnabled(false);
   }
 
   function toggleMenu() {
@@ -489,39 +654,102 @@ export async function startScene(engine) {
   scene.openMenu = showMenu;
   scene.closeMenu = hideMenu;
   scene.toggleMenu = toggleMenu;
+  menuActivator.actionManager.registerAction(
+    new BABYLON.ExecuteCodeAction(BABYLON.ActionManager.OnPickTrigger, () => {
+      toggleMenu();
+    })
+  );
 
-  xr.input.onControllerAddedObservable.add((controller) => {
-    controller.onMotionControllerInitObservable.add((motionController) => {
-      const xrIdsToTry = [
-        "xr-standard-thumbstick",
-        "xr-standard-touchpad",
-        "a-button",
-        "x-button",
-        "y-button",
-        "b-button",
-      ];
+  const xrMenuButtonStates = new Map();
 
-      for (const componentId of xrIdsToTry) {
-        const component = motionController.getComponent(componentId);
-        if (!component) continue;
-
-        let lastPressed = false;
-        component.onButtonStateChangedObservable.add(() => {
-          const pressed = component.pressed;
-          if (pressed && !lastPressed) {
-            toggleMenu();
-          }
-          lastPressed = pressed;
-        });
-
-        break;
+  function isMenuFaceButtonPressed(controller) {
+    const motionController = controller.motionController;
+    if (motionController?.components) {
+      for (const [id, component] of Object.entries(motionController.components)) {
+        const normalizedId = id.toLowerCase();
+        if (normalizedId === "a-button" || normalizedId === "x-button") {
+          return component.pressed;
+        }
       }
-    });
+    }
+
+    const primaryFaceButton = controller.inputSource?.gamepad?.buttons?.[4];
+    return !!primaryFaceButton?.pressed;
+  }
+
+  function updateXRMenuActivator() {
+    const inXR = scene.xrHelper?.baseExperience?.state === BABYLON.WebXRState.IN_XR;
+    menuActivator.isVisible = inXR;
+    if (!inXR) return;
+
+    if (menuActivator.parent) {
+      menuActivator.parent = null;
+    }
+
+    const leftController = xr.input.controllers.find(
+      (controller) => controller.inputSource?.handedness === "left"
+    );
+    const anchor = leftController?.grip || leftController?.pointer || null;
+
+    if (anchor) {
+      const origin = anchor.getAbsolutePosition();
+      const right = anchor.getDirection(BABYLON.Axis.X).normalize();
+      const up = anchor.getDirection(BABYLON.Axis.Y).normalize();
+      const forward = anchor.getDirection(BABYLON.Axis.Z).normalize();
+
+      menuActivator.position.copyFrom(
+        origin
+          .add(right.scale(-0.065))
+          .add(up.scale(0.04))
+          .add(forward.scale(0.02))
+      );
+    } else {
+      const cam = scene.xrHelper?.baseExperience?.camera ?? scene.activeCamera;
+      if (!cam) return;
+
+      const camPos = cam.globalPosition.clone();
+      const forward = cam.getDirection(BABYLON.Axis.Z).normalize();
+      const right = cam.getDirection(BABYLON.Axis.X).normalize();
+      const up = cam.getDirection(BABYLON.Axis.Y).normalize();
+
+      menuActivator.position.copyFrom(
+        camPos
+          .add(forward.scale(0.55))
+          .add(right.scale(-0.22))
+          .add(up.scale(-0.18))
+      );
+    }
+  }
+
+  xr.baseExperience.sessionManager.onXRFrameObservable.add(() => {
+    updateXRMenuActivator();
+
+    const inXR = scene.xrHelper?.baseExperience?.state === BABYLON.WebXRState.IN_XR;
+    if (!inXR) {
+      xrMenuButtonStates.clear();
+      return;
+    }
+
+    const xrCamera = scene.xrHelper?.baseExperience?.camera;
+    if (xrCamera && scene.xrOrigin) {
+      scene.xrOrigin.position.copyFromFloats(xrCamera.globalPosition.x, 0, xrCamera.globalPosition.z);
+    }
+
+    for (const controller of xr.input.controllers) {
+      const controllerId = controller.uniqueId || controller.inputSource?.handedness || "unknown";
+      const isPressed = isMenuFaceButtonPressed(controller);
+      const wasPressed = xrMenuButtonStates.get(controllerId) ?? false;
+
+      if (isPressed && !wasPressed) {
+        toggleMenu();
+      }
+
+      xrMenuButtonStates.set(controllerId, isPressed);
+    }
   });
 
   scene.onBeforeRenderObservable.add(() => {
-    if (!menuVisible) return;
-    placeMenuInFrontOfCamera();
+    updateXRMenuActivator();
   });
 
   // Toggle with ESC

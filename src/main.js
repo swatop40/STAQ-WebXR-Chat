@@ -1008,8 +1008,11 @@ async function main() {
 
       if (!grip) continue;
 
-      const cpos = grip.position;
-      const crot = grip.rotationQuaternion || BABYLON.Quaternion.Identity();
+      const cpos = grip.getAbsolutePosition();
+      const crot =
+        grip.absoluteRotationQuaternion ||
+        grip.rotationQuaternion ||
+        BABYLON.Quaternion.Identity();
 
       const tracked = {
         pos: { x: cpos.x, y: cpos.y, z: cpos.z },
