@@ -28,6 +28,7 @@ io.on("connection", (socket) => {
   root: {
     pos: makeSpawn(),
     rotY: 0,
+    scale: 1,
   },
   head: {
     pos: { x: 0, y: 1.6, z: 0 },
@@ -68,6 +69,10 @@ io.on("connection", (socket) => {
 
   if (typeof data.root?.rotY === "number") {
     p.root.rotY = data.root.rotY;
+  }
+
+  if (typeof data.root?.scale === "number") {
+    p.root.scale = data.root.scale;
   }
 
   if (data.head?.pos && typeof data.head.pos.x === "number") {
