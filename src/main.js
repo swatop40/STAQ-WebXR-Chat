@@ -4,6 +4,12 @@ import { io } from "socket.io-client";
 
 import { startScene } from "./scenes/start.js";
 
+let externalSceneLoader = null;
+
+export function setSceneLoader(fn) {
+  externalSceneLoader = fn;
+}
+
 const socket = io({
   transports: ["websocket", "polling"],
   autoConnect: false,
@@ -946,7 +952,14 @@ async function main() {
     console.error("[VOICE] Microphone error:", err);
   }
 
-  const scene = await startScene(engine);
+  let scene;
+
+    if (externalSceneLoader) {
+      scene = await externalSceneLoader(engine);
+    } else {
+      scene = await startScene(engine); 
+  }
+
   sceneRef = scene;
   uiTexture = GUI.AdvancedDynamicTexture.CreateFullscreenUI("nameUI", true, scene);
 

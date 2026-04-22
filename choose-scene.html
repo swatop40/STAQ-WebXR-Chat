@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>staqwebxrchat</title>
+    <title>staqwebxrchat | Choose Scene</title>
     <style>
       html,
       body {
@@ -52,22 +52,14 @@
         color: #111827;
       }
 
-      #nameInput {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 12px 14px;
-        border: 1px solid #cbd5e1;
-        border-radius: 10px;
-        font-size: 1rem;
-        outline: none;
+      #sceneButtons {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 8px;
       }
 
-      #nameInput:focus {
-        border-color: #2563eb;
-        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
-      }
-
-      #joinButton {
+      .sceneButton {
         width: 100%;
         padding: 12px 14px;
         border: none;
@@ -79,26 +71,58 @@
         cursor: pointer;
       }
 
-      #joinButton:hover {
+      .sceneButton:hover {
         background: #1d4ed8;
       }
     </style>
   </head>
+
   <body>
     <div id="joinOverlay">
       <div id="joinCard">
-        <h1>Welcome to the STAQ WebXR Chat Room!</h1>
-        <input
-          id="nameInput"
-          type="text"
-          maxlength="20"
-          placeholder="Enter your name"
-        />
-        <button id="joinButton" type="button">Submit</button>
+        <h1>please choose your desired enviornment</h1>
+
+        <div id="sceneButtons">
+          <button class="sceneButton" data-scene="start">Start (Test Scene)</button>
+          <button class="sceneButton" data-scene="bar">Bar Scene</button>
+          <button class="sceneButton" data-scene="parking">Parking Scene</button>
+        </div>
       </div>
     </div>
 
     <canvas id="renderCanvas"></canvas>
-    <script type="module" src="/src/main.js"></script>
+
+    <script type="module">
+  import { setSceneLoader } from "/src/main.js";
+
+  const canvas = document.getElementById("renderCanvas");
+  const overlay = document.getElementById("joinOverlay");
+  const buttons = document.querySelectorAll(".sceneButton");
+
+  buttons.forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const sceneKey = btn.dataset.scene;
+
+      const sceneMap = {
+        start: "/src/scenes/start.js",
+        bar: "/src/scenes/bar.js",
+        parking: "/src/scenes/parking.js",
+      };
+
+      const modulePath = sceneMap[sceneKey];
+      const sceneModule = await import(modulePath);
+
+        setSceneLoader(async (engine) => {
+         return await sceneModule.loadScene(engine);
+       });
+
+     
+       overlay.style.display = "none";
+
+
+     });
+    });
+</script>
+    </script>
   </body>
 </html>

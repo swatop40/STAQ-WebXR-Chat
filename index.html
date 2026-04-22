@@ -99,6 +99,14 @@
     </div>
 
     <canvas id="renderCanvas"></canvas>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module">
+      const joinButton = document.getElementById("joinButton");
+       const nameInput = document.getElementById("nameInput");
+
+       joinButton.addEventListener("click", () => {
+     sessionStorage.setItem("nameInput", nameInput.value || "Player");
+     window.location.href = "choose-scene.html";
+});
+</script>
   </body>
 </html>
