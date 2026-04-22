@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>staqwebxrchat</title>
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        font-family: Arial, Helvetica, sans-serif;
+        background: #0f172a;
+      }
+
+      #renderCanvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+
+      #joinOverlay {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.55);
+        z-index: 10;
+      }
+
+      #joinCard {
+        width: min(420px, 90vw);
+        padding: 28px 24px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.95);
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        text-align: center;
+      }
+
+      #joinCard h1 {
+        margin: 0;
+        font-size: 1.8rem;
+        line-height: 1.25;
+        color: #111827;
+      }
+
+      #nameInput {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 12px 14px;
+        border: 1px solid #cbd5e1;
+        border-radius: 10px;
+        font-size: 1rem;
+        outline: none;
+      }
+
+      #nameInput:focus {
+        border-color: #2563eb;
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+      }
+
+      #joinButton {
+        width: 100%;
+        padding: 12px 14px;
+        border: none;
+        border-radius: 10px;
+        background: #2563eb;
+        color: white;
+        font-size: 1rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      #joinButton:hover {
+        background: #1d4ed8;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="joinOverlay">
+      <div id="joinCard">
+        <h1>Welcome to the STAQ WebXR Chat Room!</h1>
+        <input
+          id="nameInput"
+          type="text"
+          maxlength="20"
+          placeholder="Enter your name"
+        />
+        <button id="joinButton" type="button">Submit</button>
+      </div>
+    </div>
+
+    <canvas id="renderCanvas"></canvas>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
