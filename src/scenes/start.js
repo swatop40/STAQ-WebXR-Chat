@@ -76,8 +76,9 @@ const TEST_ROOM_OBJECTS = [
       pickup: true,
       xrGrabOffset: new Vector3(0, -0.02, 0.02),
       xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
-      desktopGrabOffset: new Vector3(0, -0.02, 0.04),
-      desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      desktopGrabOffset: new Vector3(-0.621, 1.776, -1.037),
+      desktopGrabRotation: new Vector3(0, -0.24905477959908046, 0),
+      
     },
   },
   {
@@ -90,8 +91,8 @@ const TEST_ROOM_OBJECTS = [
       pickup: true,
       xrGrabOffset: new Vector3(0, -0.03, 0.03),
       xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
-      desktopGrabOffset: new Vector3(0, -0.02, 0.06),
-      desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      desktopGrabOffset: new Vector3(-0.618, 0.655, -0.228),
+      desktopGrabRotation: new Vector3(0, 0.7889509999049364, 0),
     },
   },
   {
@@ -104,8 +105,8 @@ const TEST_ROOM_OBJECTS = [
       pickup: true,
       xrGrabOffset: new Vector3(0, 3.84, 0.02),
       xrGrabRotation: new Vector3(0, 0, 0),
-      desktopGrabOffset: new Vector3(0, 3.84, 0.04),
-      desktopGrabRotation: new Vector3(0, 0, 0),
+      desktopGrabOffset: new Vector3(1.648, 2.642, 3.543),
+      desktopGrabRotation: new Vector3(0, 3.0182175423421165, 0),
     },
   },
   {
@@ -118,7 +119,7 @@ const TEST_ROOM_OBJECTS = [
       pickup: true,
       xrGrabOffset: new Vector3(0, -0.02, 0.02),
       xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
-      desktopGrabOffset: new Vector3(0, -0.02, 0.04),
+      desktopGrabOffset: new Vector3(-1.740, 3.133, 1.101),
       desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
     },
   },
@@ -132,8 +133,8 @@ const TEST_ROOM_OBJECTS = [
       pickup: true,
       xrGrabOffset: new Vector3(0.04, 0, 0),
       xrGrabRotation: new Vector3(0, 0, -Math.PI / 2),
-      desktopGrabOffset: new Vector3(0.06, -0.01, 0),
-      desktopGrabRotation: new Vector3(0, 0, -Math.PI / 2),
+      desktopGrabOffset: new Vector3(-1.761, -1.068, -1.018),
+      desktopGrabRotation: new Vector3(0, 0, -0.05458734417787241),
     },
   },
   {
