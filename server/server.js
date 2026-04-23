@@ -2,6 +2,8 @@ import express from "express";
 import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
+import fs from "node:fs/promises";
+import path from "node:path";
 
 const app = express();
 app.use(cors());
@@ -13,6 +15,38 @@ const io = new Server(httpServer, {
 });
 
 const players = new Map();
+const karaokeSongsDir = path.resolve(process.cwd(), "public", "karaoke-songs");
+const supportedKaraokeExtensions = new Set([".mp4", ".webm", ".mov", ".m4v"]);
+
+function makeTrackTitle(fileName) {
+  return path
+    .basename(fileName, path.extname(fileName))
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+app.get("/api/karaoke-songs", async (_req, res) => {
+  try {
+    const entries = await fs.readdir(karaokeSongsDir, { withFileTypes: true });
+    const tracks = entries
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .filter((name) => supportedKaraokeExtensions.has(path.extname(name).toLowerCase()))
+      .sort((left, right) => left.localeCompare(right))
+      .map((name) => ({
+        title: makeTrackTitle(name),
+        url: `/karaoke-songs/${encodeURIComponent(name)}`,
+        artist: "",
+        fileName: name,
+      }));
+
+    res.json({ tracks });
+  } catch (error) {
+    console.error("[KARAOKE] Failed to read karaoke songs directory", error);
+    res.status(500).json({ tracks: [], error: "Failed to read karaoke songs directory" });
+  }
+});
 
 function makeSpawn() {
   return { x: (Math.random() - 0.5) * 2, y: 1.6, z: (Math.random() - 0.5) * 2 };

@@ -980,6 +980,9 @@ function setupObjectInteractions(scene, xr) {
   function getSceneInteractableRoot(mesh) {
     let current = mesh;
     while (current) {
+      if (current.metadata?.suppressSceneInteraction) {
+        return null;
+      }
       if (current.metadata?.isSceneInteractable) {
         return current.metadata.interactableRoot || current;
       }
