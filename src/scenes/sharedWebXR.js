@@ -21,6 +21,11 @@ export const DEFAULT_XR_SETTINGS = {
   desktopMoveSpeed: 2.6,
   desktopSprintSpeed: 4.2,
   xrMoveSpeed: 1.8,
+  xrTurnMode: "snap",
+  xrSmoothTurnSpeed: 1.8,
+  xrSnapTurnAngle: Math.PI / 6,
+  xrSnapTurnCooldownMs: 280,
+  xrTurnDeadzone: 0.65,
   menuDistanceDesktop: 1.85,
   menuDistanceXR: 1.72,
   menuVerticalOffsetDesktop: -0.54,
@@ -41,21 +46,30 @@ const MOVE_KEYS = [
   "shift",
 ];
 
-function worldToLocalPosition(node, worldPos) {
-  const inv = node.getWorldMatrix().clone();
-  inv.invert();
-  return Vector3.TransformCoordinates(worldPos, inv);
-}
-
 function isInXR(scene) {
   return scene.xrHelper?.baseExperience?.state === WebXRState.IN_XR;
+}
+
+function getThumbstickAxes(controller) {
+  const axes = controller.inputSource?.gamepad?.axes || [];
+
+  if (axes.length >= 4) {
+    return { x: axes[2] ?? 0, y: axes[3] ?? 0 };
+  }
+
+  return { x: axes[0] ?? 0, y: axes[1] ?? 0 };
+}
+
+function isMobileBrowser() {
+  return /Android|iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
 }
 
 function setupMirror(scene, mirror) {
   if (!mirror) return null;
 
   const mirrorMat = new StandardMaterial("mirrorMat", scene);
-  const mirrorTex = new MirrorTexture("mirrorTex", 1024, scene, true);
+  const mirrorTex = new MirrorTexture("mirrorTex", isMobileBrowser() ? 512 : 1024, scene, true);
 
   function updateMirrorPlane() {
     const world = mirror.computeWorldMatrix(true);
@@ -174,7 +188,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     menuBoard.setEnabled(false);
     menuVisible = false;
     menuAnchorRoot = null;
-    menuHost.parent = null;
+    menuHost.setParent(null);
     menuHost.setEnabled(false);
   }
 
@@ -224,7 +238,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     const hostScale = inXR ? settings.menuScaleXR : settings.menuScaleDesktop;
 
     menuHost.scaling.set(hostScale, hostScale, hostScale);
-    menuHost.parent = null;
+    menuHost.setParent(null);
 
     const camPos = cam.globalPosition.clone();
     const forward = cam.getDirection(Axis.Z);
@@ -251,11 +265,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     if (attachToRoot) {
       menuAnchorRoot = getMenuAnchorNode();
       if (menuAnchorRoot) {
-        const worldPos = menuHost.position.clone();
-        const worldRot = menuHost.rotationQuaternion.clone();
-        menuHost.parent = menuAnchorRoot;
-        menuHost.position.copyFrom(worldToLocalPosition(menuAnchorRoot, worldPos));
-        menuHost.rotationQuaternion = worldRot;
+        menuHost.setParent(menuAnchorRoot);
       }
     }
   }
@@ -272,6 +282,12 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
       hideMenu();
     } else {
       showMenu();
+    }
+  }
+
+  function refreshMenuPosition() {
+    if (menuVisible) {
+      placeMenuInFrontOfCamera(true);
     }
   }
 
@@ -303,7 +319,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   function updateXRMenuActivator() {
     const inXR = isInXR(scene);
     menuActivator.isVisible = inXR;
-    if (!inXR) return;
+    if (!inXR || !xr) return;
 
     if (menuActivator.parent) {
       menuActivator.parent = null;
@@ -344,35 +360,37 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     }
   }
 
-  xr.baseExperience.sessionManager.onXRFrameObservable.add(() => {
-    updateXRMenuActivator();
+  if (xr) {
+    xr.baseExperience.sessionManager.onXRFrameObservable.add(() => {
+      updateXRMenuActivator();
 
-    if (!isInXR(scene)) {
-      xrMenuButtonStates.clear();
-      return;
-    }
-
-    const xrCamera = scene.xrHelper?.baseExperience?.camera;
-    if (xrCamera && scene.xrOrigin) {
-      scene.xrOrigin.position.copyFromFloats(xrCamera.globalPosition.x, 0, xrCamera.globalPosition.z);
-    }
-
-    for (const controller of xr.input.controllers) {
-      const controllerId = controller.uniqueId || controller.inputSource?.handedness || "unknown";
-      const isPressed = isMenuFaceButtonPressed(controller);
-      const wasPressed = xrMenuButtonStates.get(controllerId) ?? false;
-
-      if (isPressed && !wasPressed) {
-        toggleMenu();
+      if (!isInXR(scene)) {
+        xrMenuButtonStates.clear();
+        return;
       }
 
-      xrMenuButtonStates.set(controllerId, isPressed);
-    }
-  });
+      const xrCamera = scene.xrHelper?.baseExperience?.camera;
+      if (xrCamera && scene.xrOrigin) {
+        scene.xrOrigin.position.copyFromFloats(xrCamera.globalPosition.x, 0, xrCamera.globalPosition.z);
+      }
+
+      for (const controller of xr.input.controllers) {
+        const controllerId = controller.uniqueId || controller.inputSource?.handedness || "unknown";
+        const isPressed = isMenuFaceButtonPressed(controller);
+        const wasPressed = xrMenuButtonStates.get(controllerId) ?? false;
+
+        if (isPressed && !wasPressed) {
+          toggleMenu();
+        }
+
+        xrMenuButtonStates.set(controllerId, isPressed);
+      }
+    });
+  }
 
   scene.onBeforeRenderObservable.add(updateXRMenuActivator);
 
-  return { toggleMenu };
+  return { toggleMenu, refreshMenuPosition };
 }
 
 export async function setupSharedWebXR(scene, options) {
@@ -404,45 +422,75 @@ export async function setupSharedWebXR(scene, options) {
     },
   };
 
-  const xr = await scene.createDefaultXRExperienceAsync({
-    uiOptions: { sessionMode: "immersive-vr" },
-    floorMeshes: [ground],
-  });
-
-  scene.xrHelper = xr;
   const xrOrigin = new TransformNode("xrOrigin", scene);
   xrOrigin.position.copyFrom(xrSpawnFloor);
   scene.xrOrigin = xrOrigin;
 
-  xr.baseExperience.onInitialXRPoseSetObservable.add((xrCamera) => {
-    xrCamera.position.set(xrSpawnFloor.x, xrCamera.position.y, xrSpawnFloor.z);
-    xrOrigin.position.copyFromFloats(xrCamera.globalPosition.x, 0, xrCamera.globalPosition.z);
-  });
+  let xr = null;
 
-  xr.baseExperience.onStateChangedObservable.add((state) => {
-    if (state === WebXRState.IN_XR) {
-      xr.baseExperience.sessionManager.worldScalingFactor = settings.worldScaleFactor;
-      const xrCamera = xr.baseExperience.camera;
+  try {
+    if (!navigator.xr) {
+      throw new Error("navigator.xr is unavailable");
+    }
+
+    xr = await scene.createDefaultXRExperienceAsync({
+      uiOptions: { sessionMode: "immersive-vr" },
+      floorMeshes: [ground],
+    });
+    scene.xrHelper = xr;
+  } catch (err) {
+    scene.xrHelper = null;
+    console.warn("[XR] WebXR unavailable; continuing in desktop/mobile mode.", err);
+  }
+
+  if (xr) {
+    xr.baseExperience.onInitialXRPoseSetObservable.add((xrCamera) => {
       xrCamera.position.set(xrSpawnFloor.x, xrCamera.position.y, xrSpawnFloor.z);
       xrOrigin.position.copyFromFloats(xrCamera.globalPosition.x, 0, xrCamera.globalPosition.z);
-    } else if (state === WebXRState.NOT_IN_XR) {
-      xr.baseExperience.sessionManager.worldScalingFactor = 1;
-      scene.playerMesh.position.copyFrom(playerSpawn);
-      xrOrigin.position.copyFrom(xrSpawnFloor);
+    });
+
+    xr.baseExperience.onStateChangedObservable.add((state) => {
+      if (state === WebXRState.IN_XR) {
+        xr.baseExperience.sessionManager.worldScalingFactor = settings.worldScaleFactor;
+        const xrCamera = xr.baseExperience.camera;
+        xrCamera.position.set(xrSpawnFloor.x, xrCamera.position.y, xrSpawnFloor.z);
+        xrOrigin.position.copyFromFloats(xrCamera.globalPosition.x, 0, xrCamera.globalPosition.z);
+      } else if (state === WebXRState.NOT_IN_XR) {
+        xr.baseExperience.sessionManager.worldScalingFactor = 1;
+        scene.playerMesh.position.copyFrom(playerSpawn);
+        xrOrigin.position.copyFrom(xrSpawnFloor);
+      }
+    });
+
+    const fm = xr.baseExperience.featuresManager;
+    const teleportation = fm.enableFeature(WebXRFeatureName.TELEPORTATION, "stable", {
+      xrInput: xr.input,
+      floorMeshes: [ground],
+      renderingGroupId: 1,
+      parabolicRayEnabled: false,
+    });
+
+    xr.teleportation = teleportation;
+
+    if (WebXRFeatureName.TURNING) {
+      try {
+        fm.enableFeature(WebXRFeatureName.TURNING, "stable", {
+          snapTurns: true,
+          snapTurnAngle: Math.PI / 6,
+        });
+        console.log("[XR] Turning enabled");
+      } catch (e) {
+        console.warn("[XR] Turning feature not available; using default controller turning.", e);
+      }
     }
-  });
-
-  const fm = xr.baseExperience.featuresManager;
-  const teleportation = fm.enableFeature(WebXRFeatureName.TELEPORTATION, "stable", {
-    xrInput: xr.input,
-    floorMeshes: [ground],
-    renderingGroupId: 1,
-    parabolicRayEnabled: false,
-  });
-
-  xr.teleportation = teleportation;
+  }
 
   function applyXRMovementMode() {
+    if (!xr) {
+      console.log("[XR] Movement mode ignored because WebXR is unavailable.");
+      return;
+    }
+
     if (xrMode === "smooth") {
       xr.teleportation?.detach();
     } else {
@@ -453,22 +501,29 @@ export async function setupSharedWebXR(scene, options) {
   }
 
   applyXRMovementMode();
-  console.log("[XR] Smooth movement enabled");
-
-  if (WebXRFeatureName.TURNING) {
-    try {
-      fm.enableFeature(WebXRFeatureName.TURNING, "stable", {
-        snapTurns: true,
-        snapTurnAngle: Math.PI / 6,
-      });
-      console.log("[XR] Turning enabled");
-    } catch (e) {
-      console.warn("[XR] Turning feature not available; using default controller turning.", e);
-    }
+  if (xr) {
+    console.log("[XR] Smooth movement enabled");
   }
 
   const mirrorSetup = setupMirror(scene, mirror);
   const menu = setupMenu(scene, xr, applyXRMovementMode, settings);
+  let lastSnapTurnAt = 0;
+
+  function rotateXRView(angle) {
+    const xrCamera = scene.xrHelper?.baseExperience?.camera;
+    if (!xrCamera) return;
+
+    const yawRotation = Quaternion.RotationAxis(Vector3.Up(), angle);
+    xrCamera.rotationQuaternion = yawRotation.multiply(
+      xrCamera.rotationQuaternion || Quaternion.Identity()
+    );
+
+    if (scene.xrOrigin) {
+      scene.xrOrigin.rotation.y += angle;
+    }
+
+    menu.refreshMenuPosition();
+  }
 
   scene.onBeforeRenderObservable.add(() => {
     mirrorSetup?.updateMirrorPlane();
@@ -481,28 +536,42 @@ export async function setupSharedWebXR(scene, options) {
     }
 
     if (inXR) {
-      if (xrMode === "smooth") {
-        const xrCamera = scene.xrHelper.baseExperience.camera;
-        const dt = scene.getEngine().getDeltaTime() / 1000;
-        let moveX = 0;
-        let moveY = 0;
+      const xrCamera = scene.xrHelper.baseExperience.camera;
+      const dt = scene.getEngine().getDeltaTime() / 1000;
+      let moveX = 0;
+      let moveY = 0;
+      let turnX = 0;
 
-        for (const controller of scene.xrHelper.input.controllers) {
-          const gamepad = controller.inputSource?.gamepad;
-          if (!gamepad?.axes?.length) continue;
+      for (const controller of scene.xrHelper.input.controllers) {
+        if (!controller.inputSource?.gamepad?.axes?.length) continue;
 
-          if (Math.abs(gamepad.axes[2] ?? 0) > 0.1 || Math.abs(gamepad.axes[3] ?? 0) > 0.1) {
-            moveX = gamepad.axes[2] ?? 0;
-            moveY = gamepad.axes[3] ?? 0;
-            break;
-          }
+        const axes = getThumbstickAxes(controller);
+        const handedness = controller.inputSource?.handedness;
 
-          if (Math.abs(gamepad.axes[0] ?? 0) > 0.1 || Math.abs(gamepad.axes[1] ?? 0) > 0.1) {
-            moveX = gamepad.axes[0] ?? 0;
-            moveY = gamepad.axes[1] ?? 0;
-          }
+        if (handedness === "right") {
+          turnX = axes.x;
+          continue;
         }
 
+        if (Math.abs(axes.x) > 0.1 || Math.abs(axes.y) > 0.1) {
+          moveX = axes.x;
+          moveY = axes.y;
+        }
+      }
+
+      if (Math.abs(turnX) > settings.xrTurnDeadzone) {
+        if (settings.xrTurnMode === "smooth") {
+          rotateXRView(turnX * settings.xrSmoothTurnSpeed * dt);
+        } else {
+          const now = performance.now();
+          if (now - lastSnapTurnAt > settings.xrSnapTurnCooldownMs) {
+            rotateXRView(Math.sign(turnX) * settings.xrSnapTurnAngle);
+            lastSnapTurnAt = now;
+          }
+        }
+      }
+
+      if (xrMode === "smooth") {
         if (Math.abs(moveX) > 0.1 || Math.abs(moveY) > 0.1) {
           const forward = xrCamera.getDirection(Vector3.Forward());
           forward.y = 0;

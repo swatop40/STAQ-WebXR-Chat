@@ -40,6 +40,53 @@ let uiTexture = null;
 let appStarted = false;
 const remoteNameLabels = new Map();
 
+function isMobileBrowser() {
+  return /Android|iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
+}
+
+function shouldShowDebugLayer() {
+  return new URLSearchParams(window.location.search).get("debug") === "1" &&
+    !isMobileBrowser();
+}
+
+function showRuntimeError(message, error = null) {
+  console.error(message, error);
+
+  let box = document.getElementById("runtimeErrorOverlay");
+  if (!box) {
+    box = document.createElement("pre");
+    box.id = "runtimeErrorOverlay";
+    box.style.cssText = [
+      "position:fixed",
+      "left:8px",
+      "right:8px",
+      "bottom:8px",
+      "max-height:40vh",
+      "overflow:auto",
+      "z-index:9999",
+      "padding:10px",
+      "border-radius:8px",
+      "background:rgba(127,29,29,0.92)",
+      "color:white",
+      "font:12px/1.35 monospace",
+      "white-space:pre-wrap",
+    ].join(";");
+    document.body.appendChild(box);
+  }
+
+  const details = error?.stack || error?.message || String(error || "");
+  box.textContent = `${message}${details ? `\n${details}` : ""}`;
+}
+
+window.addEventListener("error", (event) => {
+  showRuntimeError("[APP] Runtime error", event.error || event.message);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  showRuntimeError("[APP] Unhandled promise rejection", event.reason);
+});
+
 const AVATAR_RIG = {
   rootOffset: new BABYLON.Vector3(0, -0.9, 0),
   avatarScale: new BABYLON.Vector3(0.8, 0.8, 0.8),
@@ -1059,7 +1106,9 @@ export async function launchApp(options = {}) {
 
   socket.connect();
 
-  scene.debugLayer.show();
+  if (shouldShowDebugLayer()) {
+    scene.debugLayer.show();
+  }
 
   const SEND_HZ = 15;
   let lastSend = 0;
