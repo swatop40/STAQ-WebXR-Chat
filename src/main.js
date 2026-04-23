@@ -42,16 +42,34 @@ const readySpatialSounds = new Set();
 function cleanupRemoteAudio(playerId) {
   const audioEl = remoteAudioEls.get(playerId);
   if (audioEl) {
-    audioEl.pause();
-    audioEl.srcObject = null;
-    audioEl.remove();
+    try {
+      audioEl.pause();
+      audioEl.srcObject = null;
+      audioEl.remove();
+    } catch (err) {
+      console.warn("[VOICE] audio cleanup issue:", playerId, err);
+    }
     remoteAudioEls.delete(playerId);
   }
 
   const sound = remoteSounds.get(playerId);
   if (sound) {
-    sound.stop();
-    sound.dispose();
+    try {
+      if (typeof sound.stop === "function") {
+        sound.stop();
+      }
+    } catch (err) {
+      console.warn("[VOICE] sound.stop issue:", playerId, err);
+    }
+
+    try {
+      if (typeof sound.dispose === "function") {
+        sound.dispose();
+      }
+    } catch (err) {
+      console.warn("[VOICE] sound.dispose issue:", playerId, err);
+    }
+
     remoteSounds.delete(playerId);
   }
 
@@ -92,7 +110,6 @@ async function loadAvatarTemplate(scene) {
     "default-avatar.glb",
     scene
   );
-
 }
 
 function vec3From(obj) {
@@ -101,6 +118,12 @@ function vec3From(obj) {
 
 function quatFrom(obj) {
   return new BABYLON.Quaternion(obj.x, obj.y, obj.z, obj.w);
+}
+
+function worldToLocalPosition(node, worldPos) {
+  const inv = node.getWorldMatrix().clone();
+  inv.invert();
+  return BABYLON.Vector3.TransformCoordinates(worldPos, inv);
 }
 
 async function ensureRemoteMesh(scene, id) {
@@ -114,6 +137,7 @@ async function ensureRemoteMesh(scene, id) {
     await loadAvatarTemplate(scene);
 
     const root = new BABYLON.TransformNode(`remote_${id}`, scene);
+    root.position = new BABYLON.Vector3(0, -0.9, 0);
 
     const instantiated = avatarContainer.instantiateModelsToScene(
       (name) => `${name}_${id}`,
@@ -136,50 +160,63 @@ async function ensureRemoteMesh(scene, id) {
     const headAnchor = new BABYLON.TransformNode(`headAnchor_${id}`, scene);
     const leftHandAnchor = new BABYLON.TransformNode(`leftHandAnchor_${id}`, scene);
     const rightHandAnchor = new BABYLON.TransformNode(`rightHandAnchor_${id}`, scene);
+    const leftHandOffset = new BABYLON.TransformNode(`leftHandOffset_${id}`, scene);
+    const rightHandOffset = new BABYLON.TransformNode(`rightHandOffset_${id}`, scene);
     const nameAnchor = new BABYLON.TransformNode(`nameAnchor_${id}`, scene);
 
     bodyAnchor.parent = root;
     headAnchor.parent = root;
     leftHandAnchor.parent = root;
     rightHandAnchor.parent = root;
+    leftHandOffset.parent = leftHandAnchor;
+    rightHandOffset.parent = rightHandAnchor;
     nameAnchor.parent = root;
 
     nameAnchor.position.set(0, 3.2, 0);
 
+    // starting tweak values
+    leftHandOffset.position.set(0, 0, 0);
+    rightHandOffset.position.set(0, 0, 0);
+
+    leftHandOffset.rotation.set(0, 0, 0);
+    rightHandOffset.rotation.set(0, 0, 0);
+
     if (bodyMesh) bodyMesh.parent = bodyAnchor;
     if (headMesh) headMesh.parent = headAnchor;
-    if (leftHandMesh) leftHandMesh.parent = leftHandAnchor;
-    if (rightHandMesh) rightHandMesh.parent = rightHandAnchor;
+    if (leftHandMesh) leftHandMesh.parent = leftHandOffset;
+    if (rightHandMesh) rightHandMesh.parent = rightHandOffset;
 
     root.scaling.set(0.8, 0.8, 0.8);
 
     root.metadata = {
-    bodyAnchor,
-    headAnchor,
-    leftHandAnchor,
-    rightHandAnchor,
-    nameAnchor,
-    bodyMesh,
-    headMesh,
-    leftHandMesh,
-    rightHandMesh,
-  };
+      bodyAnchor,
+      headAnchor,
+      leftHandAnchor,
+      rightHandAnchor,
+      leftHandOffset,
+      rightHandOffset,
+      nameAnchor,
+      bodyMesh,
+      headMesh,
+      leftHandMesh,
+      rightHandMesh,
+    };
 
-  const mirrorTex = scene?.mirrorTex;
-  if (mirrorTex) {
-    const avatarParts = [bodyMesh, headMesh, leftHandMesh, rightHandMesh].filter(Boolean);
+    const mirrorTex = scene?.mirrorTex;
+    if (mirrorTex) {
+      const avatarParts = [bodyMesh, headMesh, leftHandMesh, rightHandMesh].filter(Boolean);
 
-    for (const part of avatarParts) {
-      if (!mirrorTex.renderList.includes(part)) {
-        mirrorTex.renderList.push(part);
+      for (const part of avatarParts) {
+        if (!mirrorTex.renderList.includes(part)) {
+          mirrorTex.renderList.push(part);
+        }
       }
-    }
 
-    console.log(
-      `[MIRROR] Added avatar parts for ${id}:`,
-      avatarParts.map((m) => m.name)
-    );
-  }
+      console.log(
+        `[MIRROR] Added avatar parts for ${id}:`,
+        avatarParts.map((m) => m.name)
+      );
+    }
 
     remoteMeshes.set(id, root);
     pendingRemoteMeshes.delete(id);
@@ -196,6 +233,11 @@ async function ensureLocalAvatar(scene) {
   await loadAvatarTemplate(scene);
 
   const root = new BABYLON.TransformNode("localAvatar", scene);
+
+  if (scene.playerMesh) {
+    root.parent = scene.playerMesh;
+    root.position = new BABYLON.Vector3(0, -1.6, 0);
+  }
 
   const instantiated = avatarContainer.instantiateModelsToScene(
     (name) => `${name}_local`,
@@ -218,18 +260,30 @@ async function ensureLocalAvatar(scene) {
   const headAnchor = new BABYLON.TransformNode("localHeadAnchor", scene);
   const leftHandAnchor = new BABYLON.TransformNode("localLeftHandAnchor", scene);
   const rightHandAnchor = new BABYLON.TransformNode("localRightHandAnchor", scene);
+  const leftHandOffset = new BABYLON.TransformNode("localLeftHandOffset", scene);
+  const rightHandOffset = new BABYLON.TransformNode("localRightHandOffset", scene);
 
   bodyAnchor.parent = root;
   headAnchor.parent = root;
   leftHandAnchor.parent = root;
   rightHandAnchor.parent = root;
+  leftHandOffset.parent = leftHandAnchor;
+  rightHandOffset.parent = rightHandAnchor;
+
+  // starting tweak values
+  leftHandOffset.position.set(0, 0, 0);
+  rightHandOffset.position.set(0, 0, 0);
+
+  leftHandOffset.rotation.set(0, 0, 0);
+  rightHandOffset.rotation.set(0, 0, 0);
 
   if (bodyMesh) bodyMesh.parent = bodyAnchor;
   if (headMesh) headMesh.parent = headAnchor;
-  if (leftHandMesh) leftHandMesh.parent = leftHandAnchor;
-  if (rightHandMesh) rightHandMesh.parent = rightHandAnchor;
+  if (leftHandMesh) leftHandMesh.parent = leftHandOffset;
+  if (rightHandMesh) rightHandMesh.parent = rightHandOffset;
 
   root.scaling.set(0.8, 0.8, 0.8);
+  root.position = new BABYLON.Vector3(0, -0.9, 0);
 
   // Hide local head in first person so it doesn't block the camera
   if (headMesh) {
@@ -247,6 +301,8 @@ async function ensureLocalAvatar(scene) {
     headAnchor,
     leftHandAnchor,
     rightHandAnchor,
+    leftHandOffset,
+    rightHandOffset,
   };
 
   const mirrorTex = scene?.mirrorTex;
@@ -329,15 +385,7 @@ function removePeerConnection(id) {
     pc.close();
     peerConnections.delete(id);
   }
-
-  const audio = remoteAudioEls.get(id);
-  if (audio) {
-    audio.srcObject = null;
-    audio.remove();
-    remoteAudioEls.delete(id);
-  }
 }
-
 function extractYaw(camera) {
   if (camera.rotationQuaternion) {
     const q = camera.rotationQuaternion;
@@ -414,50 +462,56 @@ function createPeerConnection(targetId) {
   document.body.appendChild(audio);
   remoteAudioEls.set(targetId, audio);
 
-  const sound = new BABYLON.Sound(
-    `voice_${targetId}`,
-    audio,
-    sceneRef,
-     () => {
-      readySpatialSounds.add(targetId);
-      console.log("[VOICE] sound ready for:", targetId);
-
-      const remoteMesh = remoteMeshes.get(targetId);
-      if (remoteMesh) {
-        sound.attachToMesh(remoteMesh);
-        console.log(
-          "[VOICE] attached to mesh:",
-          targetId,
-          "pos:",
-          remoteMesh.position.x,
-          remoteMesh.position.y,
-          remoteMesh.position.z
-        );
-      } else {
-        console.warn("[VOICE] remote mesh not ready yet for:", targetId);
-      }
-    },
-    {
-      loop: true,
-      autoplay: true,
-      spatialSound: true,
-      streaming: true,
-      distanceModel: "linear",
-      maxDistance: 20,
-      rolloffFactor: 2
-    }
-  );
-
-  remoteSounds.set(targetId, sound);
-  console.log("[VOICE] sound created for:", targetId);
-
-  try {
-    await audio.play();
-    console.log("[VOICE] Playback started for:", targetId);
-  } catch (err) {
-    console.error("[VOICE] audio.play() failed for:", targetId, err);
+const sound = new BABYLON.Sound(
+  `voice_${targetId}`,
+  audio,
+  sceneRef,
+  null,
+  {
+    loop: true,
+    autoplay: true,
+    spatialSound: true,
+    streaming: true,
+    distanceModel: "linear",
+    maxDistance: 8,
+    refDistance: 1,
+    rolloffFactor: 4
   }
-};
+);
+
+remoteSounds.set(targetId, sound);
+readySpatialSounds.add(targetId);
+
+console.log("[VOICE] sound created for:", targetId);
+console.log("[VOICE] spatialSound:", sound.spatialSound);
+
+const remoteRoot = remoteMeshes.get(targetId);
+const voiceMesh =
+  remoteRoot?.metadata?.headMesh ||
+  remoteRoot?.metadata?.bodyMesh ||
+  remoteRoot;
+
+if (voiceMesh) {
+  try {
+    sound.attachToMesh(voiceMesh);
+    console.log("[VOICE] attached to voice mesh immediately:", targetId, voiceMesh.name);
+  } catch (err) {
+    console.warn("[VOICE] immediate attach failed:", targetId, err);
+  }
+} else {
+  console.warn("[VOICE] no voice mesh yet for:", targetId);
+}
+
+sound.setVolume(1);
+
+try {
+  await audio.play();
+  audio.volume = 0;
+  console.log("[VOICE] Playback started for:", targetId);
+} catch (err) {
+  console.error("[VOICE] audio.play() failed for:", targetId, err);
+}
+  };
 
   pc.onconnectionstatechange = () => {
     console.log(`[VOICE] ${targetId} state:`, pc.connectionState);
@@ -494,12 +548,21 @@ socket.on("playerJoined", async (p) => {
 
   await ensureRemoteMesh(sceneRef, p.id);
 
-  const existingSound = remoteSounds.get(p.id);
-  const existingMesh = remoteMeshes.get(p.id);
-  if (existingSound && existingMesh) {
-    existingSound.attachToMesh(existingMesh);
-    console.log("[VOICE] late attach after playerJoined:", p.id);
+const existingSound = remoteSounds.get(p.id);
+const existingMesh = remoteMeshes.get(p.id);
+const voiceMesh =
+  existingMesh?.metadata?.headMesh ||
+  existingMesh?.metadata?.bodyMesh ||
+  existingMesh;
+
+if (existingSound && voiceMesh) {
+  try {
+    existingSound.attachToMesh(voiceMesh);
+    console.log("[VOICE] late attach after playerJoined:", p.id, voiceMesh.name);
+  } catch (err) {
+    console.warn("[VOICE] late attach after playerJoined failed:", p.id, err);
   }
+}
 
   try {
     const pc = createPeerConnection(p.id);
@@ -541,11 +604,24 @@ socket.on("playersUpdate", async (players) => {
       if (!mesh) continue;
     }
 
-    const existingSound = remoteSounds.get(id);
-if (existingSound && readySpatialSounds.has(id)) {
+const existingSound = remoteSounds.get(id);
+const voiceMesh =
+  mesh?.metadata?.headMesh ||
+  mesh?.metadata?.bodyMesh ||
+  mesh;
+
+if (existingSound && voiceMesh) {
   try {
-    existingSound.attachToMesh(mesh);
-    console.log("[VOICE] late attach success:", id);
+    existingSound.attachToMesh(voiceMesh);
+
+    const absPos = voiceMesh.getAbsolutePosition();
+    console.log(
+      "[VOICE] voice mesh world pos:",
+      id,
+      absPos.x,
+      absPos.y,
+      absPos.z
+    );
   } catch (err) {
     console.warn("[VOICE] late attach failed:", id, err);
   }
@@ -555,7 +631,7 @@ if (existingSound && readySpatialSounds.has(id)) {
 
     mesh.position.set(
       p.root?.pos?.x ?? 0,
-      (p.root?.pos?.y ?? 0) - 1.6,
+      p.root?.pos?.y ?? 0,
       p.root?.pos?.z ?? 0
     );
 
@@ -577,33 +653,39 @@ if (existingSound && readySpatialSounds.has(id)) {
 
     if (bodyAnchor) {
       bodyAnchor.position.set(0, 0, 0);
-      bodyAnchor.rotation.set(0, 0, 0);
+      bodyAnchor.rotation.set(0, p.root?.rotY ?? 0, 0);
     }
 
-    if (headAnchor && p.head?.pos && p.head?.rot && p.root?.pos) {
-      headAnchor.position = vec3From({
-        x: p.head.pos.x - p.root.pos.x,
-        y: p.head.pos.y - p.root.pos.y + .15,
-        z: p.head.pos.z - p.root.pos.z,
-      });
+    if (headAnchor && p.head?.pos && p.head?.rot) {
+      const localHeadPos = worldToLocalPosition(
+        mesh,
+        new BABYLON.Vector3(p.head.pos.x, p.head.pos.y, p.head.pos.z)
+      );
+
+      headAnchor.position.copyFrom(localHeadPos);
+      headAnchor.position.y += -1.0;
       headAnchor.rotationQuaternion = quatFrom(p.head.rot);
     }
 
-    if (leftHandAnchor && p.leftHand?.pos && p.leftHand?.rot && p.root?.pos) {
-      leftHandAnchor.position = vec3From({
-        x: p.leftHand.pos.x - p.root.pos.x,
-        y: p.leftHand.pos.y - p.root.pos.y + .2,
-        z: p.leftHand.pos.z - p.root.pos.z,
-      });
+    if (leftHandAnchor && p.leftHand?.pos && p.leftHand?.rot) {
+      const localLeftPos = worldToLocalPosition(
+        mesh,
+        new BABYLON.Vector3(p.leftHand.pos.x, p.leftHand.pos.y, p.leftHand.pos.z)
+      );
+
+      leftHandAnchor.position.copyFrom(localLeftPos);
+      leftHandAnchor.position.y += 0.2;
       leftHandAnchor.rotationQuaternion = quatFrom(p.leftHand.rot);
     }
 
-    if (rightHandAnchor && p.rightHand?.pos && p.rightHand?.rot && p.root?.pos) {
-      rightHandAnchor.position = vec3From({
-        x: p.rightHand.pos.x - p.root.pos.x,
-        y: p.rightHand.pos.y - p.root.pos.y + .2,
-        z: p.rightHand.pos.z - p.root.pos.z,
-      });
+    if (rightHandAnchor && p.rightHand?.pos && p.rightHand?.rot) {
+      const localRightPos = worldToLocalPosition(
+        mesh,
+        new BABYLON.Vector3(p.rightHand.pos.x, p.rightHand.pos.y, p.rightHand.pos.z)
+      );
+
+      rightHandAnchor.position.copyFrom(localRightPos);
+      rightHandAnchor.position.y += 0.2;
       rightHandAnchor.rotationQuaternion = quatFrom(p.rightHand.rot);
     }
   }
@@ -683,10 +765,8 @@ async function unlockAudio() {
   }
 }
 
-
 window.addEventListener("click", unlockAudio, { once: true });
 window.addEventListener("touchstart", unlockAudio, { once: true });
-
 
 async function main() {
   try {
@@ -745,9 +825,12 @@ async function main() {
     lastSend = now;
 
     const cam = scene.activeCamera;
-    const pos = cam.position;
+    const pos = scene.playerMesh
+      ? scene.playerMesh.position
+      : cam.position;
 
-    let headPos = { x: pos.x, y: pos.y, z: pos.z };
+    const headWorld = cam.globalPosition;
+    let headPos = { x: headWorld.x, y: headWorld.y, z: headWorld.z };
     let headRot = { x: 0, y: 0, z: 0, w: 1 };
 
     if (cam.rotationQuaternion) {
@@ -786,46 +869,53 @@ async function main() {
         rot: { x: crot.x, y: crot.y, z: crot.z, w: crot.w },
       };
 
-      if (handedness === "left") leftHand = tracked;
-      if (handedness === "right") rightHand = tracked;
+      if (handedness === "left") rightHand = tracked;
+      if (handedness === "right") leftHand = tracked;
     }
 
     if (localAvatarParts) {
-  localAvatarParts.root.position.set(pos.x, pos.y - 1.6, pos.z);
-  localAvatarParts.root.rotation.y = extractYaw(cam);
+      localAvatarParts.root.rotation.set(0, 0, 0);
 
-  if (localAvatarParts.bodyAnchor) {
-    localAvatarParts.bodyAnchor.position.set(0, 0, 0);
-    localAvatarParts.bodyAnchor.rotation.set(0, 0, 0);
-  }
+      if (localAvatarParts.bodyAnchor) {
+        localAvatarParts.bodyAnchor.position.set(0, 0, 0);
+        localAvatarParts.bodyAnchor.rotation.set(0, extractYaw(cam), 0);
+      }
 
-  if (localAvatarParts.headAnchor) {
-    localAvatarParts.headAnchor.position = vec3From({
-      x: headPos.x - pos.x,
-      y: headPos.y - pos.y + 0.1,
-      z: headPos.z - pos.z,
-    });
-    localAvatarParts.headAnchor.rotationQuaternion = quatFrom(headRot);
-  }
+      const rootWorld = localAvatarParts.root;
 
-  if (localAvatarParts.leftHandAnchor) {
-    localAvatarParts.leftHandAnchor.position = vec3From({
-      x: leftHand.pos.x - pos.x,
-      y: leftHand.pos.y - pos.y + 0.2,
-      z: leftHand.pos.z - pos.z,
-    });
-    localAvatarParts.leftHandAnchor.rotationQuaternion = quatFrom(leftHand.rot);
-  }
+      if (localAvatarParts.headAnchor) {
+        const localHeadPos = worldToLocalPosition(
+          rootWorld,
+          new BABYLON.Vector3(headPos.x, headPos.y, headPos.z)
+        );
 
-  if (localAvatarParts.rightHandAnchor) {
-    localAvatarParts.rightHandAnchor.position = vec3From({
-      x: rightHand.pos.x - pos.x,
-      y: rightHand.pos.y - pos.y + 0.2,
-      z: rightHand.pos.z - pos.z,
-    });
-    localAvatarParts.rightHandAnchor.rotationQuaternion = quatFrom(rightHand.rot);
-  }
-}
+        localAvatarParts.headAnchor.position.copyFrom(localHeadPos);
+        localAvatarParts.headAnchor.position.y += -1.0;
+        localAvatarParts.headAnchor.rotationQuaternion = quatFrom(headRot);
+      }
+
+      if (localAvatarParts.leftHandAnchor) {
+        const localLeftPos = worldToLocalPosition(
+          rootWorld,
+          new BABYLON.Vector3(leftHand.pos.x, leftHand.pos.y, leftHand.pos.z)
+        );
+
+        localAvatarParts.leftHandAnchor.position.copyFrom(localLeftPos);
+        localAvatarParts.leftHandAnchor.position.y += 0.2;
+        localAvatarParts.leftHandAnchor.rotationQuaternion = quatFrom(leftHand.rot);
+      }
+
+      if (localAvatarParts.rightHandAnchor) {
+        const localRightPos = worldToLocalPosition(
+          rootWorld,
+          new BABYLON.Vector3(rightHand.pos.x, rightHand.pos.y, rightHand.pos.z)
+        );
+
+        localAvatarParts.rightHandAnchor.position.copyFrom(localRightPos);
+        localAvatarParts.rightHandAnchor.position.y += 0.2;
+        localAvatarParts.rightHandAnchor.rotationQuaternion = quatFrom(rightHand.rot);
+      }
+    }
 
     socket.emit("pose", {
       name: playerName,

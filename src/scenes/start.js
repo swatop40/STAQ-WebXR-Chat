@@ -49,9 +49,13 @@ export async function startScene(engine) {
     new CannonJSPlugin(true, 10, CANNON)
   );
 
-  const cam = new FreeCamera("cam", new Vector3(0.25, 2, -8), scene);
-  cam.rotation = new Vector3(0.19996493417004554, -6.291316540956004, 0);
+  const cam = new FreeCamera("cam", new Vector3(0, 0, 0), scene);
+  cam.rotation = new Vector3(0, 0, 0);
   cam.attachControl();
+  cam.inputs.clear();
+  const canvas = scene.getEngine().getRenderingCanvas();
+  cam.inputs.add(new BABYLON.FreeCameraMouseInput());
+  cam.attachControl(canvas, true);
 
   new HemisphericLight("light", new Vector3(0, 2, 0), scene);
 
@@ -59,10 +63,15 @@ export async function startScene(engine) {
   box.position = new Vector3(0, 1, 0);
 
   const mirror = MeshBuilder.CreatePlane("mirror", { width: 4.5, height: 7.2 }, scene);
-  mirror.position = new Vector3(7.29, 1, 11); // example
+  mirror.position = new Vector3(7.29, 1, 11);
 
-  const ground = MeshBuilder.CreateGround("ground", { width: 6, height: 6 }, scene);
-  ground.position.y = -0.25;
+  const ground = MeshBuilder.CreateGround("ground", { width: 20, height: 20 }, scene);
+  ground.position.y = -0;
+
+  // Desktop teleport marker
+  const teleportMarker = MeshBuilder.CreateDisc("teleportMarker", { radius: 0.3 }, scene);
+  teleportMarker.rotation.x = Math.PI / 2;
+  teleportMarker.isVisible = false;
 
   const room = await SceneLoader.ImportMeshAsync(null, "/scene-models/", "test-room.glb", scene);
   console.log("Imported meshes:", room.meshes.map((m) => m.name));
@@ -217,7 +226,10 @@ export async function startScene(engine) {
   );
 
   playerMesh.isVisible = false;
-  playerMesh.position.copyFrom(cam.position);
+  playerMesh.position = new Vector3(0.25, 2, -8);
+
+  cam.parent = playerMesh;
+  cam.position = new Vector3(0, playerHeight * 0.5, 0);
 
   playerMesh.physicsImpostor = new PhysicsImpostor(
     playerMesh,
@@ -226,22 +238,69 @@ export async function startScene(engine) {
     scene
   );
 
+  const body = playerMesh.physicsImpostor.physicsBody;
+  if (body && body.angularFactor) {
+    body.angularFactor.set(0, 0, 0);
+  }
+
+  scene.playerMesh = playerMesh;
+
+  // Desktop teleport preview (mouse hover)
+  scene.onPointerMove = function (evt, pickInfo) {
+    if (!pickInfo.hit) {
+      teleportMarker.isVisible = false;
+      return;
+    }
+
+    if (pickInfo.pickedMesh === ground) {
+      teleportMarker.position.copyFrom(pickInfo.pickedPoint);
+      teleportMarker.isVisible = true;
+    } else {
+      teleportMarker.isVisible = false;
+    }
+  };
+
+  // Desktop click-to-teleport
+  scene.onPointerDown = function (evt, pickInfo) {
+    if (evt.button !== 0) return;
+    if (!pickInfo.hit) return;
+
+    if (pickInfo.pickedMesh === ground) {
+      const target = pickInfo.pickedPoint.clone();
+      target.y += 1.7;
+
+      scene.playerMesh.position.copyFrom(target);
+
+      if (scene.playerMesh.physicsImpostor) {
+        scene.playerMesh.physicsImpostor.setLinearVelocity(Vector3.Zero());
+        scene.playerMesh.physicsImpostor.setAngularVelocity(Vector3.Zero());
+      }
+    }
+  };
+
   const xr = await scene.createDefaultXRExperienceAsync({
     uiOptions: { sessionMode: "immersive-vr" },
+    floorMeshes: [ground],
   });
 
   scene.xrHelper = xr;
 
   const fm = xr.baseExperience.featuresManager;
-  fm.disableFeature(WebXRFeatureName.TELEPORTATION);
+
+  const VRteleportation = fm.enableFeature(
+    WebXRFeatureName.TELEPORTATION,
+    "stable",
+    {
+      xrInput: xr.input,
+      floorMeshes: [ground],
+      renderingGroupId: 1,
+      parabolicRayEnabled: false,
+    }
+  );
+
+  xr.teleportation = VRteleportation;
 
   try {
-    fm.enableFeature(WebXRFeatureName.MOVEMENT, "stable", {
-      xrInput: xr.input,
-      movementOrientationFollowsViewerPose: true,
-      movementSpeed: 0.25,
-      rotationSpeed: 0.25,
-    });
     console.log("[XR] Smooth movement enabled");
   } catch (e) {
     console.error("[XR] Movement feature failed:", e);
@@ -261,9 +320,9 @@ export async function startScene(engine) {
   const mirrorTex = new MirrorTexture("mirrorTex", 256, scene, true);
 
   mirrorTex.mirrorPlane = new Plane(0, 0, 1, -mirror.position.z);
-  mirrorTex.refreshRate = 2; 
+  mirrorTex.refreshRate = 2;
 
-  mirrorTex.renderList = scene.meshes.filter(m => m !== mirror);
+  mirrorTex.renderList = scene.meshes.filter((m) => m !== mirror);
 
   mirrorMat.reflectionTexture = mirrorTex;
   mirrorMat.diffuseColor = new Color3(0.1, 0.1, 0.1);
@@ -272,7 +331,94 @@ export async function startScene(engine) {
   mirror.material = mirrorMat;
 
   scene.mirrorTex = mirrorTex;
-scene.mirrorMesh = mirror;
+  scene.mirrorMesh = mirror;
+
+  scene.onBeforeRenderObservable.add(() => {
+    if (!scene.playerMesh || !scene.activeCamera) return;
+
+    const cam = scene.activeCamera;
+    const mesh = scene.playerMesh;
+
+    mesh.position.x = cam.globalPosition.x;
+    mesh.position.z = cam.globalPosition.z;
+
+    cam.position.y = playerHeight * 0.5;
+
+    const body = mesh.physicsImpostor.physicsBody;
+    if (body) {
+      body.angularVelocity.set(0, 0, 0);
+    }
+  });
+
+  // Create host mesh FIRST
+  const menuHost = BABYLON.MeshBuilder.CreateBox("menuHost", { size: 0.01 }, scene);
+  menuHost.isVisible = false;
+  menuHost.rotationQuaternion = new BABYLON.Quaternion();
+
+  // Create GUI manager
+  const guiManager = new BABYLON.GUI.GUI3DManager(scene);
+
+  // Create panel
+  const menuPanel = new BABYLON.GUI.StackPanel3D();
+  guiManager.addControl(menuPanel);
+
+  // Link panel to host
+  menuPanel.linkToTransformNode(menuHost);
+
+  // Hide panel initially
+  menuPanel.isVisible = false;
+  menuPanel.margin = 0.2;
+
+  // Add buttons
+  function addMenuButton(text, callback) {
+    const button = new BABYLON.GUI.HolographicButton(text + "_btn");
+    menuPanel.addControl(button);
+    button.text = text;
+    button.onPointerUpObservable.add(callback);
+    return button;
+  }
+
+  addMenuButton("Switch Environment", () => console.log("Switch environment clicked"));
+  addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
+  addMenuButton("Exit Website", () => window.location.href = "https://google.com");
+
+  const closeBtn = new BABYLON.GUI.HolographicButton("close_btn");
+  menuPanel.addControl(closeBtn);
+  closeBtn.text = "X";
+  closeBtn.onPointerUpObservable.add(() => (menuPanel.isVisible = false));
+
+  // Show menu by moving the HOST
+  function showMenu() {
+    console.log("showMenu() called");
+
+    const cam = scene.activeCamera;
+
+    // Position host 1 meter in front of camera
+    const forward = cam.getDirection(new BABYLON.Vector3(0, 0, 1));
+    const pos = cam.position.add(forward.scale(1));
+
+    menuHost.position.copyFrom(pos);
+
+    // Rotate host to face camera
+    const lookDir = cam.position.subtract(menuHost.position).normalize();
+    menuHost.rotationQuaternion = BABYLON.Quaternion.FromLookDirectionLH(
+      lookDir,
+      BABYLON.Vector3.Up()
+    );
+
+    menuPanel.isVisible = true;
+  }
+
+  // Toggle with ESC
+  window.addEventListener("keydown", (e) => {
+    console.log("Key pressed:", e.key);
+
+    if (e.key === "Escape") {
+      console.log("Toggling menu visibility");
+      menuPanel.isVisible = !menuPanel.isVisible;
+      if (menuPanel.isVisible) showMenu();
+    }
+  });
 
   await scene.whenReadyAsync();
 
