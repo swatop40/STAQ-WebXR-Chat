@@ -286,6 +286,12 @@ function configureTVInteraction(result) {
   if (!root || root.metadata?.tvInteractionConfigured !== undefined) return;
 
   const player = createTVPlayerPanel(root);
+  const setTVPickableState = (isPickable) => {
+    for (const mesh of result.meshes) {
+      mesh.isPickable = isPickable;
+    }
+  };
+
   const applyTVScreenState = () => {
     const screenMaterial = root.metadata?.tvScreenMaterial;
     if (!screenMaterial) return;
@@ -308,6 +314,7 @@ function configureTVInteraction(result) {
 
   const setPlayerVisible = (isVisible) => {
     player.host.setEnabled(isVisible);
+    setTVPickableState(!isVisible);
     applyTVScreenState();
   };
 
@@ -421,40 +428,42 @@ function createTVPlayerPanel(root) {
   card.background = "#0d1a29EE";
   playerTexture.addControl(card);
 
-  const grid = new GUI.Grid(`${root.name}_playerGrid`);
-  grid.width = "92%";
-  grid.height = "88%";
-  grid.addRowDefinition(0.16);
-  grid.addRowDefinition(0.14);
-  grid.addRowDefinition(0.22);
-  grid.addRowDefinition(0.22);
-  grid.addRowDefinition(0.26);
-  grid.addColumnDefinition(0.18);
-  grid.addColumnDefinition(0.64);
-  grid.addColumnDefinition(0.18);
-  card.addControl(grid);
-
   const title = new GUI.TextBlock(`${root.name}_playerTitle`);
   title.text = "Karaoke TV";
+  title.width = "100%";
+  title.height = "12%";
+  title.top = "-36%";
   title.color = "white";
   title.fontFamily = "Arial";
-  title.fontSize = 72;
+  title.fontSize = 64;
   title.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
   title.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
   title.textWrapping = true;
-  title.columnSpan = 3;
-  grid.addControl(title, 0, 0);
+  card.addControl(title);
 
   const statusText = new GUI.TextBlock(`${root.name}_playerStatus`);
   statusText.text = "Select a song";
+  statusText.width = "100%";
+  statusText.height = "12%";
+  statusText.top = "-24%";
   statusText.color = "#d8e6f3";
   statusText.fontFamily = "Arial";
-  statusText.fontSize = 36;
+  statusText.fontSize = 32;
   statusText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
   statusText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
   statusText.textWrapping = true;
-  statusText.columnSpan = 3;
-  grid.addControl(statusText, 1, 0);
+  card.addControl(statusText);
+
+  const grid = new GUI.Grid(`${root.name}_playerGrid`);
+  grid.width = "76%";
+  grid.height = "54%";
+  grid.top = "4%";
+  grid.addRowDefinition(0.5);
+  grid.addRowDefinition(0.5);
+  grid.addColumnDefinition(0.42);
+  grid.addColumnDefinition(0.42);
+  grid.addColumnDefinition(0.16);
+  card.addControl(grid);
 
   const trackButtons = [];
   for (let row = 0; row < 2; row += 1) {
@@ -463,62 +472,62 @@ function createTVPlayerPanel(root) {
       const button = GUI.Button.CreateSimpleButton(`${root.name}_track_${index}`, "");
       styleTVLauncherButton(button, "#39556f");
       button.width = "94%";
-      button.height = "82%";
-      button.fontSize = 44;
+      button.height = "84%";
+      button.fontSize = 30;
       button.onPointerUpObservable.add(() => {
         const track = button.metadata?.track;
         if (track) {
           playTVTrack(root, track, statusText);
         }
       });
-      grid.addControl(button, 2 + row, column === 0 ? 0 : 1);
+      grid.addControl(button, row, column === 0 ? 0 : 1);
       trackButtons.push(button);
     }
   }
 
   const previousButton = GUI.Button.CreateSimpleButton(`${root.name}_pagePrev`, "<");
   styleTVLauncherButton(previousButton, "#5b6b7c");
-  previousButton.width = "84%";
-  previousButton.height = "82%";
-  previousButton.fontSize = 72;
-  grid.addControl(previousButton, 2, 2);
+  previousButton.width = "82%";
+  previousButton.height = "84%";
+  previousButton.fontSize = 54;
+  grid.addControl(previousButton, 0, 2);
 
   const nextButton = GUI.Button.CreateSimpleButton(`${root.name}_pageNext`, ">");
   styleTVLauncherButton(nextButton, "#5b6b7c");
-  nextButton.width = "84%";
-  nextButton.height = "82%";
-  nextButton.fontSize = 72;
-  grid.addControl(nextButton, 3, 2);
+  nextButton.width = "82%";
+  nextButton.height = "84%";
+  nextButton.fontSize = 54;
+  grid.addControl(nextButton, 1, 2);
 
   const controlsGrid = new GUI.Grid(`${root.name}_controlsGrid`);
-  controlsGrid.width = "100%";
-  controlsGrid.height = "92%";
+  controlsGrid.width = "58%";
+  controlsGrid.height = "16%";
+  controlsGrid.top = "35%";
   controlsGrid.addRowDefinition(1);
   controlsGrid.addColumnDefinition(1 / 3);
   controlsGrid.addColumnDefinition(1 / 3);
   controlsGrid.addColumnDefinition(1 / 3);
-  grid.addControl(controlsGrid, 4, 0);
-  controlsGrid.columnSpan = 3;
+  card.addControl(controlsGrid);
 
   const playPauseButton = GUI.Button.CreateSimpleButton(`${root.name}_playPause`, "Play");
   styleTVLauncherButton(playPauseButton, "#4e6f8d");
   playPauseButton.width = "92%";
-  playPauseButton.height = "72%";
-  playPauseButton.fontSize = 42;
+  playPauseButton.height = "84%";
+  playPauseButton.fontSize = 34;
   controlsGrid.addControl(playPauseButton, 0, 0);
 
   const stopButton = GUI.Button.CreateSimpleButton(`${root.name}_stop`, "Stop");
   styleTVLauncherButton(stopButton, "#6f4e4e");
   stopButton.width = "92%";
-  stopButton.height = "72%";
-  stopButton.fontSize = 42;
+  stopButton.height = "84%";
+  stopButton.fontSize = 34;
   controlsGrid.addControl(stopButton, 0, 1);
 
   const closeButton = GUI.Button.CreateSimpleButton(`${root.name}_close`, "Close");
   styleTVLauncherButton(closeButton, "#5b6b7c");
   closeButton.width = "92%";
-  closeButton.height = "72%";
-  closeButton.fontSize = 42;
+  closeButton.height = "84%";
+  closeButton.fontSize = 34;
   controlsGrid.addControl(closeButton, 0, 2);
 
   const state = {

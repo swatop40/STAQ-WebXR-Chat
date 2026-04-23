@@ -201,7 +201,6 @@ export function createBaseScene(engine, options = {}) {
 
   const camera = new FreeCamera("cam", Vector3.Zero(), scene);
   camera.rotation = Vector3.Zero();
-  camera.attachControl();
   camera.inputs.clear();
   const mouseInput = new BABYLON.FreeCameraMouseInput();
   mouseInput.buttons = [2];
@@ -256,18 +255,6 @@ export function createBaseScene(engine, options = {}) {
 
   camera.parent = playerMesh;
   camera.position = new Vector3(0, playerHeight * 0.5, 0);
-
-  playerMesh.physicsImpostor = new PhysicsImpostor(
-    playerMesh,
-    PhysicsImpostor.BoxImpostor,
-    { mass: 1, restitution: 0, friction: 0.5 },
-    scene
-  );
-
-  const body = playerMesh.physicsImpostor.physicsBody;
-  if (body && body.angularFactor) {
-    body.angularFactor.set(0, 0, 0);
-  }
 
   scene.playerMesh = playerMesh;
 

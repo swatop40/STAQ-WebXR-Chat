@@ -27,6 +27,7 @@ export const DEFAULT_XR_SETTINGS = {
   desktopSprintSpeed: 8.4,
   desktopLookSensitivity: 1,
   xrMoveSpeed: 3.6,
+  xrMoveDeadzone: 0.18,
   xrTurnMode: "snap",
   xrSmoothTurnSpeed: 1.8,
   xrSnapTurnAngle: Math.PI / 6,
@@ -72,6 +73,14 @@ function getThumbstickAxes(controller) {
   }
 
   return { x: axes[0] ?? 0, y: axes[1] ?? 0 };
+}
+
+function applyAxisDeadzone(value, deadzone) {
+  const magnitude = Math.abs(value);
+  if (magnitude <= deadzone) return 0;
+
+  const normalized = (magnitude - deadzone) / (1 - deadzone);
+  return Math.sign(value) * normalized;
 }
 
 function isMobileBrowser() {
@@ -991,6 +1000,17 @@ function setupObjectInteractions(scene, xr) {
     return null;
   }
 
+  function isSuppressedInteractionMesh(mesh) {
+    let current = mesh;
+    while (current) {
+      if (current.metadata?.suppressSceneInteraction) {
+        return true;
+      }
+      current = current.parent;
+    }
+    return false;
+  }
+
   function isPickupRoot(mesh) {
     const root = getSceneInteractableRoot(mesh);
     return !!root?.metadata?.pickupEnabled;
@@ -1191,6 +1211,10 @@ function setupObjectInteractions(scene, xr) {
 
     const button = pointerInfo.event?.button;
     if (pointerInfo.type !== PointerEventTypes.POINTERDOWN || (button != null && button !== 0)) {
+      return;
+    }
+
+    if (isSuppressedInteractionMesh(pointerInfo.pickInfo?.pickedMesh)) {
       return;
     }
 
@@ -2328,7 +2352,11 @@ export async function setupSharedWebXR(scene, options) {
       for (const controller of scene.xrHelper.input.controllers) {
         if (!controller.inputSource?.gamepad?.axes?.length) continue;
 
-        const axes = getThumbstickAxes(controller);
+        const rawAxes = getThumbstickAxes(controller);
+        const axes = {
+          x: applyAxisDeadzone(rawAxes.x, settings.xrMoveDeadzone),
+          y: applyAxisDeadzone(rawAxes.y, settings.xrMoveDeadzone),
+        };
         const handedness = controller.inputSource?.handedness;
 
         if (handedness === "right") {
@@ -2410,20 +2438,27 @@ export async function setupSharedWebXR(scene, options) {
     if (move.lengthSquared() > 0.0001) {
       move.normalize().scaleInPlace(moveSpeed * dt);
       mesh.position.addInPlace(move);
-
-      if (mesh.physicsImpostor) {
-        mesh.physicsImpostor.setLinearVelocity(Vector3.Zero());
-      }
     }
 
+    mesh.rotationQuaternion = Quaternion.Identity();
+    mesh.rotation.set(0, 0, 0);
     mesh.position.y = playerHeight * 0.5;
     cam.position.y = playerHeight * 0.5;
 
-    const body = mesh.physicsImpostor.physicsBody;
+    if (mesh.physicsImpostor) {
+      mesh.physicsImpostor.setLinearVelocity(Vector3.Zero());
+      mesh.physicsImpostor.setAngularVelocity(Vector3.Zero());
+    }
+
+    const body = mesh.physicsImpostor?.physicsBody;
     if (body) {
       body.position.x = mesh.position.x;
       body.position.y = mesh.position.y;
       body.position.z = mesh.position.z;
+      if (body.quaternion) {
+        body.quaternion.set(0, 0, 0, 1);
+      }
+      body.velocity.set(0, 0, 0);
       body.angularVelocity.set(0, 0, 0);
     }
   });
