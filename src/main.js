@@ -34,6 +34,7 @@ let avatarBodyContainer = null;
 
 let localAvatarRoot = null;
 let localAvatarParts = null;
+let localAvatarCustomization = null;
 
 let playerName = "Player";
 let uiTexture = null;
@@ -117,6 +118,112 @@ const AVATAR_RIG = {
   swapXRHands: false,
 };
 
+const AVATAR_STYLE = {
+  chestBadgeOffset: new BABYLON.Vector3(0, 1.84, 0.33),
+  chestBadgeSize: 0.52,
+  chestBadgeDepthOffset: 0.08,
+};
+
+const AVATAR_FACE = {
+  defaultExpression: "=D",
+  talkMouth: "0",
+  panelSize: 0.44,
+  panelOffset: new BABYLON.Vector3(0, 0, 0.57),
+  rotation: new BABYLON.Vector3(0, Math.PI, Math.PI / -2),
+  talkFrameMs: 240,
+  speechOpenThreshold: 0.055,
+  speechCloseThreshold: 0.035,
+  speechOpenHoldMs: 120,
+  speechCloseHoldMs: 220,
+};
+
+const AVATAR_COLOR_PALETTES = [
+  {
+    body: BABYLON.Color3.FromHexString("#4F46E5"),
+    head: BABYLON.Color3.FromHexString("#F4D7C6"),
+    arms: BABYLON.Color3.FromHexString("#312E81"),
+    legs: BABYLON.Color3.FromHexString("#3730A3"),
+    hands: BABYLON.Color3.FromHexString("#F1CBB5"),
+    badge: BABYLON.Color3.FromHexString("#F59E0B"),
+    badgeText: BABYLON.Color3.FromHexString("#111827"),
+  },
+  {
+    body: BABYLON.Color3.FromHexString("#0F766E"),
+    head: BABYLON.Color3.FromHexString("#F1D2BA"),
+    arms: BABYLON.Color3.FromHexString("#115E59"),
+    legs: BABYLON.Color3.FromHexString("#134E4A"),
+    hands: BABYLON.Color3.FromHexString("#EBC4AB"),
+    badge: BABYLON.Color3.FromHexString("#FDE68A"),
+    badgeText: BABYLON.Color3.FromHexString("#0F172A"),
+  },
+  {
+    body: BABYLON.Color3.FromHexString("#B91C1C"),
+    head: BABYLON.Color3.FromHexString("#F3D5C0"),
+    arms: BABYLON.Color3.FromHexString("#7F1D1D"),
+    legs: BABYLON.Color3.FromHexString("#991B1B"),
+    hands: BABYLON.Color3.FromHexString("#E8C0A6"),
+    badge: BABYLON.Color3.FromHexString("#FCA5A5"),
+    badgeText: BABYLON.Color3.FromHexString("#1F2937"),
+  },
+  {
+    body: BABYLON.Color3.FromHexString("#2563EB"),
+    head: BABYLON.Color3.FromHexString("#EFD0BC"),
+    arms: BABYLON.Color3.FromHexString("#1D4ED8"),
+    legs: BABYLON.Color3.FromHexString("#1E40AF"),
+    hands: BABYLON.Color3.FromHexString("#E5BEAA"),
+    badge: BABYLON.Color3.FromHexString("#BFDBFE"),
+    badgeText: BABYLON.Color3.FromHexString("#0F172A"),
+  },
+  {
+    body: BABYLON.Color3.FromHexString("#7C3AED"),
+    head: BABYLON.Color3.FromHexString("#F2D4C0"),
+    arms: BABYLON.Color3.FromHexString("#6D28D9"),
+    legs: BABYLON.Color3.FromHexString("#5B21B6"),
+    hands: BABYLON.Color3.FromHexString("#E7C1AB"),
+    badge: BABYLON.Color3.FromHexString("#DDD6FE"),
+    badgeText: BABYLON.Color3.FromHexString("#111827"),
+  },
+  {
+    body: BABYLON.Color3.FromHexString("#EA580C"),
+    head: BABYLON.Color3.FromHexString("#F3D4BE"),
+    arms: BABYLON.Color3.FromHexString("#C2410C"),
+    legs: BABYLON.Color3.FromHexString("#9A3412"),
+    hands: BABYLON.Color3.FromHexString("#E6BDA6"),
+    badge: BABYLON.Color3.FromHexString("#FED7AA"),
+    badgeText: BABYLON.Color3.FromHexString("#1F2937"),
+  },
+];
+
+const AVATAR_CUSTOMIZATION_COLOR_OPTIONS = [
+  "#4F46E5",
+  "#0F766E",
+  "#B91C1C",
+  "#2563EB",
+  "#7C3AED",
+  "#EA580C",
+  "#111827",
+  "#475569",
+  "#84CC16",
+  "#E11D48",
+  "#F59E0B",
+  "#F8FAFC",
+];
+
+const AVATAR_FACE_OPTIONS = [
+  "=D",
+  "=)",
+  ":)",
+  ":D",
+  "=P",
+  ":P",
+  "=|",
+  ":/",
+  ":O",
+  ";)",
+  "=]",
+  ":]",
+];
+
 // Voice chat variables
 let localStream = null;
 let micMode = "open";
@@ -129,6 +236,7 @@ const peerConnections = new Map();
 const remoteAudioEls = new Map();
 const remotePlayerNames = new Map();
 const mutedRemoteIds = new Set();
+let localVoiceAnalyser = null;
 
 function logConnectedPlayers(context, playersLike = null) {
   const ids = playersLike
@@ -162,6 +270,61 @@ function cleanupRemoteAudio(playerId) {
 
 function clamp01(value) {
   return Math.min(1, Math.max(0, value));
+}
+
+function getVoiceAnalysisContext() {
+  const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextCtor) return null;
+
+  if (!getVoiceAnalysisContext.context) {
+    getVoiceAnalysisContext.context = new AudioContextCtor();
+  }
+
+  return getVoiceAnalysisContext.context;
+}
+
+function createVoiceAnalyser(stream) {
+  if (!stream) return null;
+
+  try {
+    const context = getVoiceAnalysisContext();
+    if (!context) return null;
+    context.resume?.().catch(() => {});
+
+    const source = context.createMediaStreamSource(stream);
+    const analyser = context.createAnalyser();
+    analyser.fftSize = 256;
+    analyser.smoothingTimeConstant = 0.7;
+    source.connect(analyser);
+
+    return {
+      context,
+      source,
+      analyser,
+      data: new Uint8Array(analyser.fftSize),
+      speaking: false,
+      level: 0,
+    };
+  } catch (error) {
+    console.warn("[VOICE] Failed to create analyser", error);
+    return null;
+  }
+}
+
+function readVoiceLevel(voiceState) {
+  if (!voiceState?.analyser || !voiceState?.data) return 0;
+
+  voiceState.analyser.getByteTimeDomainData(voiceState.data);
+  let total = 0;
+
+  for (let i = 0; i < voiceState.data.length; i += 1) {
+    const normalized = (voiceState.data[i] - 128) / 128;
+    total += normalized * normalized;
+  }
+
+  const rms = Math.sqrt(total / voiceState.data.length);
+  voiceState.level = rms;
+  return rms;
 }
 
 function applyMicMode() {
@@ -253,6 +416,44 @@ async function createRemoteAudio(playerId, stream) {
   return audioEl;
 }
 
+function updateLocalVoiceActivity() {
+  if (!localAvatarParts) return;
+
+  const tracks = localStream?.getAudioTracks?.() || [];
+  const micActive = tracks.some((track) => track.enabled && track.readyState === "live");
+  let isSpeaking = false;
+  const now = performance.now();
+
+  if (micActive && localVoiceAnalyser) {
+    const level = readVoiceLevel(localVoiceAnalyser);
+    if (localVoiceAnalyser.speaking) {
+      if (level >= AVATAR_FACE.speechCloseThreshold) {
+        localVoiceAnalyser.lastAboveCloseAt = now;
+        isSpeaking = true;
+      } else {
+        const lastAboveCloseAt = localVoiceAnalyser.lastAboveCloseAt ?? now;
+        isSpeaking = (now - lastAboveCloseAt) <= AVATAR_FACE.speechCloseHoldMs;
+      }
+    } else {
+      if (level >= AVATAR_FACE.speechOpenThreshold) {
+        localVoiceAnalyser.firstAboveOpenAt ??= now;
+        isSpeaking = (now - localVoiceAnalyser.firstAboveOpenAt) >= AVATAR_FACE.speechOpenHoldMs;
+      } else {
+        localVoiceAnalyser.firstAboveOpenAt = null;
+        isSpeaking = false;
+      }
+    }
+    localVoiceAnalyser.speaking = isSpeaking;
+  } else if (localVoiceAnalyser) {
+    localVoiceAnalyser.speaking = false;
+    localVoiceAnalyser.firstAboveOpenAt = null;
+    localVoiceAnalyser.lastAboveCloseAt = null;
+  }
+
+  localAvatarParts.isSpeaking = isSpeaking;
+  updateAvatarFaceState(localAvatarParts, now);
+}
+
 function getPercentLabel(value) {
   return `${Math.round(value * 100)}%`;
 }
@@ -337,6 +538,71 @@ function createAudioControls() {
 
 function createAvatarControls() {
   return {
+    getColorOptions() {
+      return [...AVATAR_CUSTOMIZATION_COLOR_OPTIONS];
+    },
+    getFaceOptions() {
+      return [...AVATAR_FACE_OPTIONS];
+    },
+    getCurrentCustomization() {
+      if (!localAvatarCustomization) {
+        localAvatarCustomization = createDefaultAvatarCustomization(playerName);
+      }
+
+      return {
+        body: localAvatarCustomization.body?.toHexString?.() || null,
+        head: localAvatarCustomization.head?.toHexString?.() || null,
+        arms: localAvatarCustomization.arms?.toHexString?.() || null,
+        legs: localAvatarCustomization.legs?.toHexString?.() || null,
+        hands: localAvatarCustomization.hands?.toHexString?.() || null,
+        badge: localAvatarCustomization.badge?.toHexString?.() || null,
+        badgeText: localAvatarCustomization.badgeText?.toHexString?.() || null,
+        faceExpression: localAvatarCustomization.faceExpression || AVATAR_FACE.defaultExpression,
+      };
+    },
+    setPartColor(part, hexColor) {
+      if (!localAvatarCustomization) {
+        localAvatarCustomization = createDefaultAvatarCustomization(playerName);
+      }
+
+      if (!["body", "head", "arms", "legs", "hands", "badge", "badgeText"].includes(part)) {
+        return null;
+      }
+
+      try {
+        localAvatarCustomization[part] = BABYLON.Color3.FromHexString(hexColor);
+      } catch {
+        return null;
+      }
+
+      if (localAvatarParts) {
+        applyAvatarAppearance(localAvatarParts, playerName, "local", localAvatarCustomization);
+      }
+
+      return localAvatarCustomization[part].toHexString();
+    },
+    setFaceExpression(expression) {
+      if (!AVATAR_FACE_OPTIONS.includes(expression)) {
+        return null;
+      }
+
+      if (!localAvatarCustomization) {
+        localAvatarCustomization = createDefaultAvatarCustomization(playerName);
+      }
+
+      localAvatarCustomization.faceExpression = expression;
+      if (localAvatarParts) {
+        applyAvatarAppearance(localAvatarParts, playerName, "local", localAvatarCustomization);
+      }
+      return localAvatarCustomization.faceExpression;
+    },
+    resetCustomization() {
+      localAvatarCustomization = createDefaultAvatarCustomization(playerName);
+      if (localAvatarParts) {
+        applyAvatarAppearance(localAvatarParts, playerName, "local", localAvatarCustomization);
+      }
+      return this.getCurrentCustomization();
+    },
     autoHeightFromXR() {
       const camera = sceneRef?.xrHelper?.baseExperience?.camera || sceneRef?.activeCamera;
       const height = Math.max(camera?.globalPosition?.y ?? camera?.position?.y ?? 1, 1);
@@ -450,6 +716,450 @@ function createHandSphere(scene, name, diffuseColor) {
   material.specularColor = new BABYLON.Color3(0.1, 0.1, 0.1);
   mesh.material = material;
   return mesh;
+}
+
+function hashString(value) {
+  let hash = 0;
+
+  for (const char of value) {
+    hash = ((hash << 5) - hash) + char.charCodeAt(0);
+    hash |= 0;
+  }
+
+  return Math.abs(hash);
+}
+
+function getAvatarAppearanceSeed(name = "Player") {
+  const normalized = String(name || "Player").trim() || "Player";
+  const palette = AVATAR_COLOR_PALETTES[hashString(normalized) % AVATAR_COLOR_PALETTES.length];
+  const chestGlyphMatch = normalized.match(/[A-Za-z0-9]/);
+
+  return {
+    palette,
+    chestGlyph: (chestGlyphMatch?.[0] || "?").toUpperCase(),
+  };
+}
+
+function cloneColor(color) {
+  return color?.clone?.() || null;
+}
+
+function createDefaultAvatarCustomization(name = "Player") {
+  const seed = getAvatarAppearanceSeed(name);
+  return {
+    body: cloneColor(seed.palette.body),
+    head: cloneColor(seed.palette.head),
+    arms: cloneColor(seed.palette.arms),
+    legs: cloneColor(seed.palette.legs),
+    hands: cloneColor(seed.palette.hands),
+    badge: cloneColor(seed.palette.badge),
+    badgeText: cloneColor(seed.palette.badgeText),
+    faceExpression: AVATAR_FACE.defaultExpression,
+  };
+}
+
+function serializeAvatarCustomization(customization) {
+  if (!customization) return null;
+
+  return {
+    body: customization.body?.toHexString?.() || null,
+    head: customization.head?.toHexString?.() || null,
+    arms: customization.arms?.toHexString?.() || null,
+    legs: customization.legs?.toHexString?.() || null,
+    hands: customization.hands?.toHexString?.() || null,
+    badge: customization.badge?.toHexString?.() || null,
+    badgeText: customization.badgeText?.toHexString?.() || null,
+    faceExpression: customization.faceExpression || AVATAR_FACE.defaultExpression,
+  };
+}
+
+function deserializeAvatarCustomization(serialized, name = "Player") {
+  const base = createDefaultAvatarCustomization(name);
+  if (!serialized || typeof serialized !== "object") {
+    return base;
+  }
+
+  const parseColor = (value, fallback) => {
+    if (typeof value !== "string") return fallback;
+    try {
+      return BABYLON.Color3.FromHexString(value);
+    } catch {
+      return fallback;
+    }
+  };
+
+  return {
+    body: parseColor(serialized.body, base.body),
+    head: parseColor(serialized.head, base.head),
+    arms: parseColor(serialized.arms, base.arms),
+    legs: parseColor(serialized.legs, base.legs),
+    hands: parseColor(serialized.hands, base.hands),
+    badge: parseColor(serialized.badge, base.badge),
+    badgeText: parseColor(serialized.badgeText, base.badgeText),
+    faceExpression: AVATAR_FACE_OPTIONS.includes(serialized.faceExpression)
+      ? serialized.faceExpression
+      : base.faceExpression,
+  };
+}
+
+function applyColorToMaterial(material, color) {
+  if (!material || !color) return;
+
+  if ("albedoColor" in material && material.albedoColor) {
+    material.albedoColor.copyFrom(color);
+  }
+
+  if ("diffuseColor" in material && material.diffuseColor) {
+    material.diffuseColor.copyFrom(color);
+  }
+
+  if ("specularColor" in material && material.specularColor) {
+    material.specularColor = new BABYLON.Color3(0.12, 0.12, 0.12);
+  }
+}
+
+function ensureAvatarMeshTint(mesh, color) {
+  if (!mesh || !color) return;
+
+  let material = mesh.metadata?.avatarTintMaterial || mesh.material || null;
+  if (!material) return;
+
+  if (!mesh.metadata?.avatarTintMaterial) {
+    material = material.clone(`${mesh.name}_avatarTint`);
+    mesh.material = material;
+    mesh.metadata = {
+      ...(mesh.metadata || {}),
+      avatarTintMaterial: material,
+    };
+  }
+
+  applyColorToMaterial(material, color);
+}
+
+function ensureAvatarMeshTintList(meshes, color) {
+  if (!Array.isArray(meshes) || !color) return;
+  for (const mesh of meshes) {
+    ensureAvatarMeshTint(mesh, color);
+  }
+}
+
+function ensureChestBadge(parts, rootId) {
+  if (parts?.chestBadgePlane && parts?.chestBadgeTexture) {
+    return {
+      plane: parts.chestBadgePlane,
+      material: parts.chestBadgeMaterial,
+      texture: parts.chestBadgeTexture,
+    };
+  }
+
+  if (!parts?.bodyAnchor) return null;
+
+  const badgePlane = BABYLON.MeshBuilder.CreatePlane(
+    `${rootId}_chestBadge`,
+    { size: AVATAR_STYLE.chestBadgeSize, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+    parts.bodyAnchor.getScene()
+  );
+  badgePlane.parent = parts.bodyAnchor;
+  badgePlane.position.copyFrom(AVATAR_STYLE.chestBadgeOffset);
+  badgePlane.isPickable = false;
+  badgePlane.renderingGroupId = 2;
+  badgePlane.alwaysSelectAsActiveMesh = true;
+
+  const badgeTexture = new BABYLON.DynamicTexture(
+    `${rootId}_chestBadgeTexture`,
+    { width: 256, height: 256 },
+    parts.bodyAnchor.getScene(),
+    true
+  );
+
+  const badgeMaterial = new BABYLON.StandardMaterial(
+    `${rootId}_chestBadgeMaterial`,
+    parts.bodyAnchor.getScene()
+  );
+  badgeMaterial.diffuseTexture = badgeTexture;
+  badgeMaterial.emissiveTexture = badgeTexture;
+  badgeMaterial.opacityTexture = badgeTexture;
+  badgeMaterial.specularColor = BABYLON.Color3.Black();
+  badgeMaterial.backFaceCulling = false;
+  badgeMaterial.useAlphaFromDiffuseTexture = true;
+  badgeMaterial.emissiveColor = BABYLON.Color3.White();
+  badgeMaterial.zOffset = -2;
+  badgePlane.material = badgeMaterial;
+
+  parts.chestBadgePlane = badgePlane;
+  parts.chestBadgeMaterial = badgeMaterial;
+  parts.chestBadgeTexture = badgeTexture;
+
+  return {
+    plane: badgePlane,
+    material: badgeMaterial,
+    texture: badgeTexture,
+  };
+}
+
+function updateChestBadgePlacement(parts) {
+  const badgePlane = parts?.chestBadgePlane;
+  const bodyAnchor = parts?.bodyAnchor;
+  if (!badgePlane || !bodyAnchor) return;
+
+  const leftShoulder = parts.leftShoulderAnchor?.position || AVATAR_RIG.leftShoulderOffset;
+  const rightShoulder = parts.rightShoulderAnchor?.position || AVATAR_RIG.rightShoulderOffset;
+  const leftHip = parts.leftHipAnchor?.position || AVATAR_RIG.leftHipOffset;
+  const rightHip = parts.rightHipAnchor?.position || AVATAR_RIG.rightHipOffset;
+
+  const shoulderCenter = leftShoulder.add(rightShoulder).scale(0.5);
+  const hipCenter = leftHip.add(rightHip).scale(0.5);
+  const chestCenter = BABYLON.Vector3.Lerp(hipCenter, shoulderCenter, 0.7);
+
+  badgePlane.position.set(
+    chestCenter.x + AVATAR_STYLE.chestBadgeOffset.x,
+    chestCenter.y + AVATAR_STYLE.chestBadgeOffset.y - shoulderCenter.y,
+    AVATAR_STYLE.chestBadgeOffset.z - AVATAR_STYLE.chestBadgeDepthOffset
+  );
+  badgePlane.rotation.y = Math.PI;
+}
+
+function splitFaceExpression(expression = AVATAR_FACE.defaultExpression) {
+  const cleaned = String(expression || AVATAR_FACE.defaultExpression);
+
+  if (cleaned.length >= 2) {
+    return {
+      eyes: cleaned[0],
+      mouth: cleaned.slice(1),
+    };
+  }
+
+  return {
+    eyes: cleaned || "=",
+    mouth: AVATAR_FACE.talkMouth,
+  };
+}
+
+function ensureAvatarFace(parts, rootId) {
+  if (parts?.facePlane && parts?.faceTexture) {
+    return {
+      plane: parts.facePlane,
+      texture: parts.faceTexture,
+      material: parts.faceMaterial,
+    };
+  }
+
+  const faceParent = parts?.headMesh || parts?.headAnchor || null;
+  if (!faceParent) return null;
+
+  const facePlane = BABYLON.MeshBuilder.CreatePlane(
+    `${rootId}_facePlane`,
+    { size: AVATAR_FACE.panelSize, sideOrientation: BABYLON.Mesh.DOUBLESIDE },
+    faceParent.getScene()
+  );
+  facePlane.parent = faceParent;
+  facePlane.position.copyFrom(AVATAR_FACE.panelOffset);
+  facePlane.rotation.copyFrom(AVATAR_FACE.rotation);
+  facePlane.isPickable = false;
+  facePlane.renderingGroupId = 2;
+  facePlane.alwaysSelectAsActiveMesh = true;
+
+  const faceTexture = new BABYLON.DynamicTexture(
+    `${rootId}_faceTexture`,
+    { width: 256, height: 256 },
+    faceParent.getScene(),
+    true
+  );
+
+  const faceMaterial = new BABYLON.StandardMaterial(
+    `${rootId}_faceMaterial`,
+    faceParent.getScene()
+  );
+  faceMaterial.diffuseTexture = faceTexture;
+  faceMaterial.emissiveTexture = faceTexture;
+  faceMaterial.opacityTexture = faceTexture;
+  faceMaterial.useAlphaFromDiffuseTexture = true;
+  faceMaterial.specularColor = BABYLON.Color3.Black();
+  faceMaterial.emissiveColor = BABYLON.Color3.White();
+  faceMaterial.backFaceCulling = false;
+  faceMaterial.zOffset = -2;
+  facePlane.material = faceMaterial;
+
+  parts.facePlane = facePlane;
+  parts.faceTexture = faceTexture;
+  parts.faceMaterial = faceMaterial;
+
+  return {
+    plane: facePlane,
+    texture: faceTexture,
+    material: faceMaterial,
+  };
+}
+
+function updateAvatarFacePlacement(parts) {
+  const facePlane = parts?.facePlane;
+  if (!facePlane) return;
+
+  const desiredParent = parts?.headMesh || parts?.headAnchor || null;
+  if (!desiredParent) return;
+
+  if (facePlane.parent !== desiredParent) {
+    facePlane.parent = desiredParent;
+  }
+
+  facePlane.position.copyFrom(AVATAR_FACE.panelOffset);
+  facePlane.rotation.copyFrom(AVATAR_FACE.rotation);
+}
+
+function getFaceTextColor(backgroundColor) {
+  const luminance = (backgroundColor.r * 0.299) + (backgroundColor.g * 0.587) + (backgroundColor.b * 0.114);
+  return luminance > 0.62
+    ? BABYLON.Color3.FromHexString("#111827")
+    : BABYLON.Color3.FromHexString("#F9FAFB");
+}
+
+function drawAvatarFace(texture, expression, mouthOverride = null, backgroundColor = null, textColor = null) {
+  if (!texture) return;
+
+  const visibleExpression = mouthOverride
+    ? `${String(expression || AVATAR_FACE.defaultExpression).slice(0, -1)}${mouthOverride}`
+    : String(expression || AVATAR_FACE.defaultExpression);
+  const ctx = texture.getContext();
+  const width = texture.getSize().width;
+  const height = texture.getSize().height;
+  const fillColor = backgroundColor || BABYLON.Color3.FromHexString("#111827");
+  const glyphColor = textColor || getFaceTextColor(fillColor);
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = fillColor.toHexString();
+  ctx.beginPath();
+  ctx.roundRect(18, 18, width - 36, height - 36, 30);
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(255,255,255,0.08)";
+  ctx.lineWidth = 8;
+  ctx.stroke();
+
+  ctx.fillStyle = glyphColor.toHexString();
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "bold 148px monospace";
+  ctx.fillText(visibleExpression, width * 0.5, height * 0.54);
+  texture.update();
+}
+
+function updateAvatarFaceState(parts, nowMs = performance.now()) {
+  if (!parts) return;
+
+  const face = ensureAvatarFace(parts, parts.root?.name || "avatar");
+  if (!face) return;
+  updateAvatarFacePlacement(parts);
+
+  const expression = parts.faceExpression || AVATAR_FACE.defaultExpression;
+  const mouth = splitFaceExpression(expression).mouth;
+  const mouthOverride = parts.isSpeaking
+    ? (Math.floor(nowMs / AVATAR_FACE.talkFrameMs) % 2 === 0 ? AVATAR_FACE.talkMouth : mouth)
+    : null;
+  const backgroundHex = parts.faceBackgroundColor?.toHexString?.() || "";
+  const textHex = parts.faceTextColor?.toHexString?.() || "";
+  const signature = `${expression}|${mouthOverride || ""}|${parts.isSpeaking ? "talk" : "idle"}|${backgroundHex}|${textHex}`;
+
+  if (parts.faceRenderSignature === signature) return;
+
+  drawAvatarFace(
+    face.texture,
+    expression,
+    mouthOverride,
+    parts.faceBackgroundColor,
+    parts.faceTextColor
+  );
+  parts.faceRenderSignature = signature;
+}
+
+function drawChestBadge(texture, glyph, fillColor, textColor) {
+  if (!texture) return;
+
+  const ctx = texture.getContext();
+  const width = texture.getSize().width;
+  const height = texture.getSize().height;
+  const radius = 34;
+
+  ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = "rgba(0, 0, 0, 0)";
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.beginPath();
+  ctx.moveTo(radius, 20);
+  ctx.lineTo(width - radius, 20);
+  ctx.quadraticCurveTo(width - 20, 20, width - 20, radius);
+  ctx.lineTo(width - 20, height - radius);
+  ctx.quadraticCurveTo(width - 20, height - 20, width - radius, height - 20);
+  ctx.lineTo(radius, height - 20);
+  ctx.quadraticCurveTo(20, height - 20, 20, height - radius);
+  ctx.lineTo(20, radius);
+  ctx.quadraticCurveTo(20, 20, radius, 20);
+  ctx.closePath();
+  ctx.fillStyle = fillColor.toHexString();
+  ctx.fill();
+
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
+  ctx.lineWidth = 10;
+  ctx.stroke();
+
+  ctx.fillStyle = textColor.toHexString();
+  ctx.font = "bold 148px Arial";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(glyph, width * 0.5, height * 0.55);
+  texture.update();
+}
+
+function applyAvatarAppearance(parts, displayName = "Player", rootId = "avatar", customization = null) {
+  if (!parts) return;
+
+  const seed = getAvatarAppearanceSeed(displayName);
+  const resolvedCustomization = customization || createDefaultAvatarCustomization(displayName);
+  const appearance = {
+    chestGlyph: seed.chestGlyph,
+    body: resolvedCustomization.body || seed.palette.body,
+    head: resolvedCustomization.head || seed.palette.head,
+    arms: resolvedCustomization.arms || seed.palette.arms,
+    legs: resolvedCustomization.legs || seed.palette.legs,
+    hands: resolvedCustomization.hands || seed.palette.hands,
+    badge: resolvedCustomization.badge || seed.palette.badge,
+    badgeText: resolvedCustomization.badgeText || seed.palette.badgeText,
+    faceExpression: resolvedCustomization.faceExpression || AVATAR_FACE.defaultExpression,
+  };
+  const signature = `${displayName}|${appearance.chestGlyph}|${appearance.body.toHexString()}|${appearance.head.toHexString()}|${appearance.arms.toHexString()}|${appearance.legs.toHexString()}|${appearance.hands.toHexString()}|${appearance.badge.toHexString()}|${appearance.badgeText.toHexString()}|${appearance.faceExpression}`;
+  if (parts.appearanceSignature === signature) {
+    return;
+  }
+
+  ensureAvatarMeshTintList(parts.bodyMeshes, appearance.body);
+  ensureAvatarMeshTint(parts.bodyMesh, appearance.body);
+  ensureAvatarMeshTint(parts.headMesh, appearance.head);
+  ensureAvatarMeshTint(parts.leftUpperArm, appearance.arms);
+  ensureAvatarMeshTint(parts.rightUpperArm, appearance.arms);
+  ensureAvatarMeshTint(parts.leftLowerArm, appearance.arms);
+  ensureAvatarMeshTint(parts.rightLowerArm, appearance.arms);
+  ensureAvatarMeshTint(parts.leftLeg, appearance.legs);
+  ensureAvatarMeshTint(parts.rightLeg, appearance.legs);
+  ensureAvatarMeshTint(parts.leftHandMesh, appearance.hands);
+  ensureAvatarMeshTint(parts.rightHandMesh, appearance.hands);
+
+  const chestBadge = ensureChestBadge(parts, rootId);
+  if (chestBadge) {
+    updateChestBadgePlacement(parts);
+    drawChestBadge(
+      chestBadge.texture,
+      appearance.chestGlyph,
+      appearance.badge,
+      appearance.badgeText
+    );
+  }
+
+  parts.faceBackgroundColor = appearance.head.clone();
+  parts.faceTextColor = getFaceTextColor(parts.faceBackgroundColor);
+  parts.faceExpression = appearance.faceExpression;
+  ensureAvatarFace(parts, rootId);
+  updateAvatarFaceState(parts);
+
+  parts.appearanceSignature = signature;
 }
 
 function rotationFromUpToDirection(direction) {
@@ -770,6 +1480,8 @@ function applyAvatarPose(parts, rootNode, pose) {
   updateArmPose(parts, rootNode, "right");
   updateLegPose(parts, rootNode, "left");
   updateLegPose(parts, rootNode, "right");
+  updateChestBadgePlacement(parts);
+  updateAvatarFaceState(parts);
   updateNameAnchor(parts, rootNode);
 }
 
@@ -834,12 +1546,11 @@ async function ensureRemoteMesh(scene, id) {
       headMesh.parent = headAnchor;
     }
 
-    const bodyMesh =
-      bodyAnchor.getChildMeshes(false).find((m) => m !== headMesh) ||
-      bodyAnchor.getChildMeshes(false)[0] ||
-      null;
+    const bodyMeshes = bodyChildren.filter((m) => m && m !== headMesh);
+    const bodyMesh = bodyMeshes[0] || bodyChildren[0] || null;
 
     root.metadata = {
+      root,
       bodyAnchor,
       headAnchor,
       leftHandAnchor,
@@ -855,11 +1566,14 @@ async function ensureRemoteMesh(scene, id) {
       rightLowerArm: armRig.rightLowerArm,
       leftLeg: legRig.leftLeg,
       rightLeg: legRig.rightLeg,
+      bodyMeshes,
       bodyMesh,
       headMesh,
       leftHandMesh,
       rightHandMesh,
     };
+
+    applyAvatarAppearance(root.metadata, remotePlayerNames.get(id) || "Player", `remote_${id}`, null);
 
     const mirrorTex = scene?.mirrorTex;
     if (mirrorTex) {
@@ -939,10 +1653,8 @@ async function ensureLocalAvatar(scene) {
     headMesh.parent = headAnchor;
   }
 
-  const bodyMesh =
-    bodyAnchor.getChildMeshes(false).find((m) => m !== headMesh) ||
-    bodyAnchor.getChildMeshes(false)[0] ||
-    null;
+  const bodyMeshes = bodyChildren.filter((m) => m && m !== headMesh);
+  const bodyMesh = bodyMeshes[0] || bodyChildren[0] || null;
 
   if (headMesh) {
     headMesh.isVisible = true;
@@ -951,6 +1663,7 @@ async function ensureLocalAvatar(scene) {
   localAvatarRoot = root;
   localAvatarParts = {
     root,
+    bodyMeshes,
     bodyMesh,
     headMesh,
     leftHandMesh,
@@ -971,6 +1684,11 @@ async function ensureLocalAvatar(scene) {
     rightLeg: legRig.rightLeg,
     bodyYaw: 0,
   };
+
+  if (!localAvatarCustomization) {
+    localAvatarCustomization = createDefaultAvatarCustomization(playerName);
+  }
+  applyAvatarAppearance(localAvatarParts, playerName, "local", localAvatarCustomization);
 
   const mirrorTex = scene?.mirrorTex;
   if (mirrorTex) {
@@ -1216,6 +1934,12 @@ socket.on("playersUpdate", async (players) => {
     }
 
     ensureRemoteNameLabel(id, mesh, p.name || "Player");
+    applyAvatarAppearance(
+      mesh.metadata,
+      p.name || "Player",
+      `remote_${id}`,
+      deserializeAvatarCustomization(p.avatarCustomization, p.name || "Player")
+    );
 
     applyAvatarTransform(
       mesh,
@@ -1325,6 +2049,9 @@ export async function launchApp(options = {}) {
   if (options.playerName) {
     playerName = options.playerName;
   }
+  if (!localAvatarCustomization) {
+    localAvatarCustomization = createDefaultAvatarCustomization(playerName);
+  }
 
   try {
     localStream = await navigator.mediaDevices.getUserMedia({
@@ -1357,6 +2084,7 @@ export async function launchApp(options = {}) {
     });
 
     applyMicMode();
+    localVoiceAnalyser = createVoiceAnalyser(localStream);
   } catch (err) {
     console.error("[VOICE] Microphone error:", err);
   }
@@ -1393,6 +2121,7 @@ export async function launchApp(options = {}) {
 
     if (!scene.activeCamera) return;
 
+    updateLocalVoiceActivity();
     updateAllRemoteAudioVolumes();
 
     if (!socket.connected) return;
@@ -1533,6 +2262,7 @@ export async function launchApp(options = {}) {
     socket.emit("pose", {
       name: playerName,
       avatarMode: xrActive ? "vr" : "desktop",
+      avatarCustomization: serializeAvatarCustomization(localAvatarCustomization),
       root: {
         pos: { x: pos.x, y: pos.y, z: pos.z },
         rotY: localAvatarParts?.bodyYaw ?? extractYaw(cam),
@@ -1557,6 +2287,7 @@ const joinButton = document.getElementById("joinButton");
 async function handleJoin() {
   const enteredName = nameInput.value.trim();
   playerName = enteredName || `Player-${Math.floor(Math.random() * 1000)}`;
+  localAvatarCustomization = createDefaultAvatarCustomization(playerName);
 
   joinOverlay.style.display = "none";
 

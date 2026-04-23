@@ -60,6 +60,7 @@ io.on("connection", (socket) => {
   name: "Player",
   room: "lobby",
   avatarMode: "desktop",
+  avatarCustomization: null,
   root: {
     pos: makeSpawn(),
     rotY: 0,
@@ -96,6 +97,21 @@ io.on("connection", (socket) => {
 
   if (data.avatarMode === "vr" || data.avatarMode === "desktop") {
     p.avatarMode = data.avatarMode;
+  }
+
+  if (data.avatarCustomization && typeof data.avatarCustomization === "object") {
+    p.avatarCustomization = {
+      body: typeof data.avatarCustomization.body === "string" ? data.avatarCustomization.body : null,
+      head: typeof data.avatarCustomization.head === "string" ? data.avatarCustomization.head : null,
+      arms: typeof data.avatarCustomization.arms === "string" ? data.avatarCustomization.arms : null,
+      legs: typeof data.avatarCustomization.legs === "string" ? data.avatarCustomization.legs : null,
+      hands: typeof data.avatarCustomization.hands === "string" ? data.avatarCustomization.hands : null,
+      badge: typeof data.avatarCustomization.badge === "string" ? data.avatarCustomization.badge : null,
+      badgeText: typeof data.avatarCustomization.badgeText === "string" ? data.avatarCustomization.badgeText : null,
+      faceExpression: typeof data.avatarCustomization.faceExpression === "string"
+        ? data.avatarCustomization.faceExpression.slice(0, 4)
+        : null,
+    };
   }
 
   if (data.root?.pos && typeof data.root.pos.x === "number") {

@@ -153,6 +153,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     gameBoard: null,
     playerTexts: [],
     statusText: null,
+    restartButton: null,
   };
   const desktopHold = {
     root: null,
@@ -179,6 +180,17 @@ function setupDartInteractions(scene, xr, options = {}) {
     { maxRadius: 0.78, points: 20, label: "Outer Red" },
     { maxRadius: 1.05, points: 10, label: "Outer Gray" },
   ];
+
+  function isSuppressedInteractionMesh(mesh) {
+    let current = mesh;
+    while (current) {
+      if (current.metadata?.suppressSceneInteraction) {
+        return true;
+      }
+      current = current.parent;
+    }
+    return false;
+  }
 
   function getDartRoot(mesh) {
     let current = mesh;
@@ -308,12 +320,22 @@ function setupDartInteractions(scene, xr, options = {}) {
     return root.physicsImpostor;
   }
 
+  function restoreDartBaseScale(root) {
+    const baseLocalScaling = root?.metadata?.baseLocalScaling;
+    if (baseLocalScaling) {
+      root.scaling.copyFrom(baseLocalScaling);
+    }
+  }
+
   function alignDartWithVelocity(root, velocity) {
     if (!root || !velocity || velocity.lengthSquared() < 0.01) return;
 
     const direction = velocity.normalizeToNew();
+    const referenceUp = Math.abs(Vector3.Dot(direction, Vector3.Up())) > 0.98
+      ? Vector3.Forward()
+      : Vector3.Up();
     root.rotationQuaternion = Quaternion
-      .FromLookDirectionLH(direction, Vector3.Up())
+      .FromLookDirectionLH(direction, referenceUp)
       .multiply(dartFlightRotationOffset);
   }
 
@@ -475,7 +497,11 @@ function setupDartInteractions(scene, xr, options = {}) {
     if (dartGamePanelTransform?.scaling) {
       gameBoard.scaling.copyFrom(dartGamePanelTransform.scaling);
     }
-    gameBoard.isPickable = false;
+    gameBoard.isPickable = true;
+    gameBoard.metadata = {
+      ...(gameBoard.metadata || {}),
+      suppressSceneInteraction: true,
+    };
 
     const gameTexture = GUI.AdvancedDynamicTexture.CreateForMesh(gameBoard, 1024, 640, false);
     const panel = new GUI.Rectangle("dartGamePanel");
@@ -527,12 +553,47 @@ function setupDartInteractions(scene, xr, options = {}) {
     statusText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
     panel.addControl(statusText);
 
+    const restartButton = GUI.Button.CreateSimpleButton("dartGameRestartButton", "Restart");
+    restartButton.width = "24%";
+    restartButton.height = "16%";
+    restartButton.top = "36%";
+    restartButton.left = "35%";
+    restartButton.thickness = 2;
+    restartButton.cornerRadius = 14;
+    restartButton.color = "white";
+    restartButton.background = "#4e6f8d";
+    restartButton.fontFamily = "Arial";
+    restartButton.fontSize = 34;
+    restartButton.textBlock.textWrapping = true;
+    restartButton.textBlock.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+    restartButton.textBlock.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+    restartButton.onPointerUpObservable.add(() => {
+      resetDartGame();
+    });
+    panel.addControl(restartButton);
+
     dartScore.hitBoard = hitBoard;
     dartScore.hitText = hitText;
     dartScore.gameBoard = gameBoard;
     dartScore.playerTexts = playerTexts;
     dartScore.statusText = statusText;
+    dartScore.restartButton = restartButton;
     updateDartGameDisplay("Player 1 throws");
+  }
+
+  function resetDartGame() {
+    dartScore.activePlayer = 0;
+    dartScore.turnThrows = 0;
+    dartScore.gameOver = false;
+    dartScore.players[0].remaining = 300;
+    dartScore.players[1].remaining = 300;
+
+    if (dartScore.hitText) {
+      dartScore.hitText.text = "Ready";
+    }
+
+    updateDartGameDisplay("Player 1 throws");
+    console.log("[DART] Game restarted");
   }
 
   function updateDartGameDisplay(status = null) {
@@ -586,6 +647,12 @@ function setupDartInteractions(scene, xr, options = {}) {
     updateDartGameDisplay(status);
   }
 
+  function advanceDartTurn(status = null) {
+    dartScore.turnThrows = 0;
+    dartScore.activePlayer = (dartScore.activePlayer + 1) % dartScore.players.length;
+    updateDartGameDisplay(status || `${dartScore.players[dartScore.activePlayer].name} throws`);
+  }
+
   function recordDartBoardScore(root, boardRoot, pick) {
     const score = getDartBoardScore(boardRoot, pick);
     ensureDartScoreDisplay(boardRoot, pick);
@@ -598,7 +665,10 @@ function setupDartInteractions(scene, xr, options = {}) {
     if (dartScore.gameOver) {
       status = "Game over";
     } else if (nextRemaining < 0) {
-      status = `${player.name} busts on ${score.label}`;
+      status = `${player.name}: Bust!`;
+      if (dartScore.activePlayer === scoringPlayerIndex) {
+        advanceDartTurn(`${player.name}: Bust!`);
+      }
     } else {
       player.remaining = nextRemaining;
       if (nextRemaining === 0) {
@@ -609,10 +679,14 @@ function setupDartInteractions(scene, xr, options = {}) {
     }
 
     if (dartScore.hitText) {
-      dartScore.hitText.text = `${score.label}\n${score.points} points`;
+      dartScore.hitText.text = nextRemaining < 0
+        ? "Bust!"
+        : `${score.label}\n${score.points} points`;
     }
 
-    updateDartGameDisplay(status);
+    if (!(nextRemaining < 0 && !dartScore.gameOver)) {
+      updateDartGameDisplay(status);
+    }
     console.log(`[DART] ${status}`);
     return score;
   }
@@ -626,6 +700,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     dartFlightPositions.delete(root);
 
     root.setParent(null);
+    restoreDartBaseScale(root);
     const velocityDirection = velocity.normalizeToNew();
     const surfaceNormal = pick.getNormal?.(true, true);
     const impactDirection = surfaceNormal?.lengthSquared?.() > 0.0001
@@ -656,6 +731,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     dartFlightPositions.delete(root);
 
     root.setParent(null);
+    restoreDartBaseScale(root);
     const impactDirection = velocity.normalizeToNew();
     alignDartWithVelocity(root, impactDirection);
     root.computeWorldMatrix(true);
@@ -774,6 +850,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     const worldPos = world.getTranslation();
 
     root.setParent(null);
+    restoreDartBaseScale(root);
     root.position.copyFrom(worldPos);
     alignDartWithVelocity(root, velocity);
     setDartPickable(root, true);
@@ -861,6 +938,7 @@ function setupDartInteractions(scene, xr, options = {}) {
 
     const button = pointerInfo.event?.button;
     if (button != null && button !== 0) return;
+    if (isSuppressedInteractionMesh(pointerInfo.pickInfo?.pickedMesh)) return;
 
     if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
       if (!desktopHold.root) {
