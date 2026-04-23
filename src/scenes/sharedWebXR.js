@@ -161,30 +161,215 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   menuPanel.addRowDefinition(1);
   menuCard.addControl(menuPanel);
 
-  let menuButtonIndex = 0;
+  const settingsPanel = new GUI.Grid("settingsMenuGrid");
+  settingsPanel.width = "97%";
+  settingsPanel.height = "86%";
+  settingsPanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  settingsPanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  settingsPanel.isVisible = false;
+  for (let i = 0; i < 6; i += 1) {
+    settingsPanel.addColumnDefinition(1 / 6);
+  }
+  settingsPanel.addRowDefinition(1);
+  menuCard.addControl(settingsPanel);
 
-  function addMenuButton(text, callback) {
-    const button = GUI.Button.CreateSimpleButton(`${text}_btn`, text);
+  const volumePanel = new GUI.Grid("volumeMenuGrid");
+  volumePanel.width = "97%";
+  volumePanel.height = "86%";
+  volumePanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  volumePanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  volumePanel.isVisible = false;
+  for (let i = 0; i < 6; i += 1) {
+    volumePanel.addColumnDefinition(1 / 6);
+  }
+  volumePanel.addRowDefinition(1);
+  menuCard.addControl(volumePanel);
+
+  let menuButtonIndex = 0;
+  let settingsButtonIndex = 0;
+  let volumeButtonIndex = 0;
+  let pendingLeaveAction = null;
+
+  function styleMenuButton(button, fontSize = 72, background = "#4e6f8d") {
     button.width = "95%";
     button.height = "96%";
     button.thickness = 2;
     button.cornerRadius = 18;
     button.color = "white";
-    button.background = "#4e6f8d";
-    button.fontSize = 72;
+    button.background = background;
+    button.fontSize = fontSize;
     button.fontFamily = "Arial";
     button.paddingLeft = "6px";
     button.paddingRight = "6px";
     button.textBlock.textWrapping = true;
     button.textBlock.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
     button.textBlock.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+    return button;
+  }
+
+  function controlName(text, suffix) {
+    return `${text.replace(/[^a-z0-9]+/gi, "_")}_${suffix}`;
+  }
+
+  function addMenuButton(text, callback) {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "btn"), text);
+    styleMenuButton(button);
     button.onPointerUpObservable.add(callback);
     menuPanel.addControl(button, 0, menuButtonIndex);
     menuButtonIndex += 1;
     return button;
   }
 
+  function addSettingsButton(text, callback) {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "settings_btn"), text);
+    styleMenuButton(button);
+    button.onPointerUpObservable.add(callback);
+    settingsPanel.addControl(button, 0, settingsButtonIndex);
+    settingsButtonIndex += 1;
+    return button;
+  }
+
+  function addVolumeButton(text, callback) {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "volume_btn"), text);
+    styleMenuButton(button);
+    button.onPointerUpObservable.add(callback);
+    volumePanel.addControl(button, 0, volumeButtonIndex);
+    volumeButtonIndex += 1;
+    return button;
+  }
+
+  function showMainPanel() {
+    menuPanel.isVisible = true;
+    settingsPanel.isVisible = false;
+    volumePanel.isVisible = false;
+    leaveConfirmPanel.isVisible = false;
+  }
+
+  function showSettingsPanel() {
+    menuPanel.isVisible = false;
+    settingsPanel.isVisible = true;
+    volumePanel.isVisible = false;
+    leaveConfirmPanel.isVisible = false;
+  }
+
+  function showVolumePanel() {
+    menuPanel.isVisible = false;
+    settingsPanel.isVisible = false;
+    volumePanel.isVisible = true;
+    leaveConfirmPanel.isVisible = false;
+  }
+
+  const leaveConfirmPanel = new GUI.Grid("leaveConfirmPanel");
+  leaveConfirmPanel.width = "93%";
+  leaveConfirmPanel.height = "82%";
+  leaveConfirmPanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  leaveConfirmPanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  leaveConfirmPanel.isVisible = false;
+  leaveConfirmPanel.addRowDefinition(0.43);
+  leaveConfirmPanel.addRowDefinition(0.57);
+  leaveConfirmPanel.addColumnDefinition(0.5);
+  leaveConfirmPanel.addColumnDefinition(0.5);
+  menuCard.addControl(leaveConfirmPanel);
+
+  const leaveConfirmText = new GUI.TextBlock("leaveConfirmText");
+  leaveConfirmText.text = "Are you sure you want to leave?";
+  leaveConfirmText.color = "white";
+  leaveConfirmText.fontFamily = "Arial";
+  leaveConfirmText.fontSize = 82;
+  leaveConfirmText.textWrapping = true;
+  leaveConfirmText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  leaveConfirmText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  leaveConfirmText.columnSpan = 2;
+  leaveConfirmPanel.addControl(leaveConfirmText, 0, 0);
+
+  function showMainMenuPanel() {
+    pendingLeaveAction = null;
+    leaveConfirmText.text = "Are you sure you want to leave?";
+    leaveYesButton.isEnabled = true;
+    leaveNoButton.isEnabled = true;
+    showMainPanel();
+  }
+
+  function showLeaveConfirm(action) {
+    pendingLeaveAction = action;
+    menuPanel.isVisible = false;
+    settingsPanel.isVisible = false;
+    volumePanel.isVisible = false;
+    leaveConfirmPanel.isVisible = true;
+  }
+
+  const leaveYesButton = GUI.Button.CreateSimpleButton("leaveYes_btn", "Yes");
+  styleMenuButton(leaveYesButton, 82, "#2f7d5f");
+  leaveYesButton.width = "92%";
+  leaveYesButton.height = "92%";
+  leaveYesButton.onPointerUpObservable.add(() => {
+    const action = pendingLeaveAction;
+    pendingLeaveAction = null;
+    if (action) action();
+  });
+  leaveConfirmPanel.addControl(leaveYesButton, 1, 0);
+
+  const leaveNoButton = GUI.Button.CreateSimpleButton("leaveNo_btn", "No");
+  styleMenuButton(leaveNoButton, 82, "#7c3f48");
+  leaveNoButton.width = "92%";
+  leaveNoButton.height = "92%";
+  leaveNoButton.onPointerUpObservable.add(showMainMenuPanel);
+  leaveConfirmPanel.addControl(leaveNoButton, 1, 1);
+
+  function navigateAfterXRExit(url) {
+    const baseExperience = scene.xrHelper?.baseExperience || xr?.baseExperience;
+
+    if (!baseExperience || baseExperience.state !== WebXRState.IN_XR) {
+      window.location.href = url;
+      return;
+    }
+
+    leaveConfirmText.text = "Leaving VR...";
+    leaveYesButton.isEnabled = false;
+    leaveNoButton.isEnabled = false;
+
+    let didNavigate = false;
+    let stateObserver = null;
+    let fallbackTimer = null;
+
+    const navigate = () => {
+      if (didNavigate) return;
+
+      didNavigate = true;
+      if (stateObserver) {
+        baseExperience.onStateChangedObservable.remove(stateObserver);
+      }
+      if (fallbackTimer) {
+        window.clearTimeout(fallbackTimer);
+      }
+
+      window.setTimeout(() => {
+        window.location.href = url;
+      }, 100);
+    };
+
+    stateObserver = baseExperience.onStateChangedObservable.add((state) => {
+      if (state === WebXRState.NOT_IN_XR) {
+        navigate();
+      }
+    });
+
+    fallbackTimer = window.setTimeout(navigate, 1800);
+
+    const exitPromise = typeof baseExperience.exitXRAsync === "function"
+      ? baseExperience.exitXRAsync()
+      : baseExperience.sessionManager?.session?.end?.();
+
+    if (exitPromise) {
+      Promise.resolve(exitPromise).then(navigate).catch((err) => {
+        console.warn("[XR] Failed to exit before navigation; leaving page anyway.", err);
+        navigate();
+      });
+    }
+  }
+
   function hideMenu() {
+    showMainMenuPanel();
     menuBoard.setEnabled(false);
     menuVisible = false;
     menuAnchorRoot = null;
@@ -192,26 +377,113 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     menuHost.setEnabled(false);
   }
 
-  addMenuButton("Emotes", () => console.log("Open emotes clicked"));
-  addMenuButton("Switch Environment", () => {
-    const answer = window.confirm("Are you sure you want to leave this scene?");
-    if (answer) {
-      window.location.href = "/choose-scene.html";
-    }
-  });
+  function getMicModeLabel() {
+    const mode = scene.voiceControls?.getMicMode?.() || "open";
+    if (mode === "muted") return "Mic Muted";
+    if (mode === "pushToTalk") return "Push To Talk";
+    return "Open Mic";
+  }
+
+  function updateSettingsLabels() {
+    locomotionButton.textBlock.text =
+      scene.navigation.xrMode === "teleport" ? "Locomotion: Teleport" : "Locomotion: Smooth";
+    turnModeButton.textBlock.text =
+      scene.navigation.xrTurnMode === "smooth" ? "Turning: Smooth" : "Turning: Snap";
+    micModeButton.textBlock.text = getMicModeLabel();
+  }
+
+  function getVolumeLabels() {
+    return scene.audioControls?.getVolumeLabels?.() || {
+      scene: "Scene Vol: 100%",
+      players: "Player Vol: 100%",
+    };
+  }
+
+  function updateVolumeLabels() {
+    const labels = getVolumeLabels();
+    sceneVolumeDownButton.textBlock.text = `${labels.scene}\n-`;
+    sceneVolumeUpButton.textBlock.text = `${labels.scene}\n+`;
+    playerVolumeDownButton.textBlock.text = `${labels.players}\n-`;
+    playerVolumeUpButton.textBlock.text = `${labels.players}\n+`;
+  }
+
   addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
+  addMenuButton("Emotes", () => console.log("Open emotes clicked"));
   addMenuButton("Settings", () => {
+    updateSettingsLabels();
+    showSettingsPanel();
+  });
+  addMenuButton("Switch Environment", () => {
+    showLeaveConfirm(() => {
+      navigateAfterXRExit("/choose-scene.html");
+    });
+  });
+  addMenuButton("Exit Website", () => {
+    showLeaveConfirm(() => {
+      navigateAfterXRExit("https://google.com");
+    });
+  });
+  addMenuButton("Close The Menu", hideMenu);
+
+  const locomotionButton = addSettingsButton("Locomotion: Smooth", () => {
     const nextMode = scene.navigation.toggleXRMode();
     applyXRMovementMode();
     console.log(`[SETTINGS] XR locomotion set to ${nextMode}`);
+    updateSettingsLabels();
   });
-  addMenuButton("Exit Website", () => {
-    const answer = window.confirm("Are you sure you want to leave STAQ-WebXR?");
-    if (answer) {
-      window.location.href = "https://google.com";
-    }
+
+  const turnModeButton = addSettingsButton("Turning: Snap", () => {
+    const nextMode = scene.navigation.toggleXRTurnMode();
+    console.log(`[SETTINGS] XR turning set to ${nextMode}`);
+    updateSettingsLabels();
   });
-  addMenuButton("Close The Menu", hideMenu);
+
+  addSettingsButton("Volume Settings", () => {
+    updateVolumeLabels();
+    showVolumePanel();
+  });
+
+  const micModeButton = addSettingsButton("Open Mic", () => {
+    scene.voiceControls?.cycleMicMode?.();
+    updateSettingsLabels();
+  });
+
+  addSettingsButton("Settings", () => {
+    console.log("[SETTINGS] More settings coming soon");
+  });
+
+  addSettingsButton("Back", () => {
+    showMainMenuPanel();
+  });
+
+  const sceneVolumeDownButton = addVolumeButton("Scene Vol\n-", () => {
+    scene.audioControls?.adjustSceneVolume?.(-0.1);
+    updateVolumeLabels();
+  });
+
+  const sceneVolumeUpButton = addVolumeButton("Scene Vol\n+", () => {
+    scene.audioControls?.adjustSceneVolume?.(0.1);
+    updateVolumeLabels();
+  });
+
+  const playerVolumeDownButton = addVolumeButton("Player Vol\n-", () => {
+    scene.audioControls?.adjustPlayerVolume?.(-0.1);
+    updateVolumeLabels();
+  });
+
+  const playerVolumeUpButton = addVolumeButton("Player Vol\n+", () => {
+    scene.audioControls?.adjustPlayerVolume?.(0.1);
+    updateVolumeLabels();
+  });
+
+  addVolumeButton("Volume", () => {
+    console.log("[SETTINGS] Volume controls adjust in 10% steps");
+  });
+
+  addVolumeButton("Back", () => {
+    updateSettingsLabels();
+    showSettingsPanel();
+  });
 
   function getMenuCamera() {
     return isInXR(scene)
@@ -410,15 +682,23 @@ export async function setupSharedWebXR(scene, options) {
   );
 
   let xrMode = "smooth";
+  let xrTurnMode = settings.xrTurnMode;
 
   scene.navigation = {
     desktopMode: "smooth",
     xrMode,
+    xrTurnMode,
     toggleXRMode() {
       xrMode = xrMode === "teleport" ? "smooth" : "teleport";
       this.xrMode = xrMode;
       console.log(`[NAV] XR mode: ${xrMode}`);
       return xrMode;
+    },
+    toggleXRTurnMode() {
+      xrTurnMode = xrTurnMode === "smooth" ? "snap" : "smooth";
+      this.xrTurnMode = xrTurnMode;
+      console.log(`[NAV] XR turn mode: ${xrTurnMode}`);
+      return xrTurnMode;
     },
   };
 
@@ -560,7 +840,7 @@ export async function setupSharedWebXR(scene, options) {
       }
 
       if (Math.abs(turnX) > settings.xrTurnDeadzone) {
-        if (settings.xrTurnMode === "smooth") {
+        if (scene.navigation.xrTurnMode === "smooth") {
           rotateXRView(turnX * settings.xrSmoothTurnSpeed * dt);
         } else {
           const now = performance.now();

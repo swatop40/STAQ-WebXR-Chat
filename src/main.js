@@ -91,7 +91,7 @@ const AVATAR_RIG = {
   avatarScale: new BABYLON.Vector3(0.8, 0.8, 0.8),
   bodyVisualScale: new BABYLON.Vector3(0.78, 0.78, 0.78),
   headVisualScale: new BABYLON.Vector3(0.92, 0.92, 0.92),
-  nameAnchorOffset: new BABYLON.Vector3(0, 3.2, 0),
+  nameAnchorOffset: new BABYLON.Vector3(0, 0.3, 0),
   visualYOffset: -1.9,
   headAnchorYOffset: 0,
   desktopBodyAnchorHeadOffset: .2,
@@ -119,8 +119,73 @@ const AVATAR_RIG = {
 
 // Voice chat variables
 let localStream = null;
+let micMode = "open";
+let sceneVolume = 1;
+let playerVolume = 1;
 const peerConnections = new Map();
 const remoteAudioEls = new Map();
+
+function clamp01(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function applyMicMode() {
+  const tracks = localStream?.getAudioTracks?.() || [];
+  const enabled = micMode === "open";
+
+  for (const track of tracks) {
+    track.enabled = enabled;
+  }
+
+  console.log(`[VOICE] Mic mode: ${micMode}`);
+}
+
+function applyPlayerVolume() {
+  for (const audio of remoteAudioEls.values()) {
+    audio.volume = playerVolume;
+  }
+}
+
+function getPercentLabel(value) {
+  return `${Math.round(value * 100)}%`;
+}
+
+function createVoiceControls() {
+  return {
+    getMicMode() {
+      return micMode;
+    },
+    cycleMicMode() {
+      const modes = ["open", "muted", "pushToTalk"];
+      const currentIndex = modes.indexOf(micMode);
+      micMode = modes[(currentIndex + 1) % modes.length];
+      applyMicMode();
+      return micMode;
+    },
+  };
+}
+
+function createAudioControls() {
+  return {
+    getVolumeLabels() {
+      return {
+        scene: `Scene Vol: ${getPercentLabel(sceneVolume)}`,
+        players: `Player Vol: ${getPercentLabel(playerVolume)}`,
+      };
+    },
+    adjustSceneVolume(delta) {
+      sceneVolume = clamp01(sceneVolume + delta);
+      console.log(`[AUDIO] Scene volume: ${getPercentLabel(sceneVolume)}`);
+      return sceneVolume;
+    },
+    adjustPlayerVolume(delta) {
+      playerVolume = clamp01(playerVolume + delta);
+      applyPlayerVolume();
+      console.log(`[AUDIO] Player volume: ${getPercentLabel(playerVolume)}`);
+      return playerVolume;
+    },
+  };
+}
 
 function addAvatarToMirror(scene, root) {
   const mirrorTex = scene?.mirrorTex;
@@ -288,6 +353,33 @@ function placeLimbSegment(rootNode, mesh, startWorld, endWorld) {
   mesh.position.copyFrom(start.add(end).scale(0.5));
   mesh.scaling.set(1, length, 1);
   mesh.rotationQuaternion = rotationFromUpToDirection(delta);
+}
+
+function updateNameAnchor(parts, rootNode) {
+  if (!parts?.nameAnchor || !rootNode) return;
+
+  if (parts.headMesh) {
+    parts.headMesh.computeWorldMatrix(true);
+
+    const headBounds = parts.headMesh.getBoundingInfo().boundingBox;
+    const min = headBounds.minimumWorld;
+    const max = headBounds.maximumWorld;
+    const labelWorldPos = new BABYLON.Vector3(
+      (min.x + max.x) * 0.5,
+      max.y + AVATAR_RIG.nameAnchorOffset.y,
+      (min.z + max.z) * 0.5
+    );
+
+    parts.nameAnchor.position.copyFrom(worldToLocalPosition(rootNode, labelWorldPos));
+    return;
+  }
+
+  if (parts.headAnchor) {
+    const labelWorldPos = parts.headAnchor
+      .getAbsolutePosition()
+      .add(AVATAR_RIG.nameAnchorOffset);
+    parts.nameAnchor.position.copyFrom(worldToLocalPosition(rootNode, labelWorldPos));
+  }
 }
 
 function getAvatarScaleFactorForHeight(height) {
@@ -509,6 +601,7 @@ function applyAvatarPose(parts, rootNode, pose) {
   updateArmPose(parts, rootNode, "right");
   updateLegPose(parts, rootNode, "left");
   updateLegPose(parts, rootNode, "right");
+  updateNameAnchor(parts, rootNode);
 }
 
 async function ensureRemoteMesh(scene, id) {
@@ -864,6 +957,7 @@ function createPeerConnection(targetId) {
       audio.playsInline = true;
       audio.controls = false;
       audio.style.display = "none";
+      audio.volume = playerVolume;
       document.body.appendChild(audio);
       remoteAudioEls.set(targetId, audio);
     }
@@ -1090,6 +1184,8 @@ export async function launchApp(options = {}) {
       track.onunmute = () => console.log(`[VOICE] Track ${i} unmuted`);
       track.onended = () => console.warn(`[VOICE] Track ${i} ended`);
     });
+
+    applyMicMode();
   } catch (err) {
     console.error("[VOICE] Microphone error:", err);
   }
@@ -1103,6 +1199,8 @@ export async function launchApp(options = {}) {
   }
 
   sceneRef = scene;
+  scene.voiceControls = createVoiceControls();
+  scene.audioControls = createAudioControls();
   uiTexture = GUI.AdvancedDynamicTexture.CreateFullscreenUI("nameUI", true, scene);
 
   await ensureLocalAvatar(scene);
