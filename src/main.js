@@ -47,13 +47,19 @@ const AVATAR_RIG = {
   headVisualScale: new BABYLON.Vector3(0.92, 0.92, 0.92),
   nameAnchorOffset: new BABYLON.Vector3(0, 3.2, 0),
   headAnchorYOffset: -1.0,
+  desktopBodyAnchorHeadOffset: .2,
   handAnchorYOffset: 0.2,
   leftShoulderOffset: new BABYLON.Vector3(-0.42, 1.55, 0.02),
   rightShoulderOffset: new BABYLON.Vector3(0.42, 1.55, 0.02),
+  leftHipOffset: new BABYLON.Vector3(-0.18, 0.58, 0),
+  rightHipOffset: new BABYLON.Vector3(0.18, 0.58, 0),
+  footOutset: 0.18,
+  footForwardOffset: 0.04,
   upperArmLength: 0.38,
   lowerArmLength: 0.4,
   upperArmDiameter: 0.12,
   lowerArmDiameter: 0.1,
+  legDiameter: 0.12,
   handSphereDiameter: 0.16,
   referenceUserHeight: 1.7,
   minScaleFactor: 0.65,
@@ -246,7 +252,7 @@ function getAvatarScaleFactorForHeight(height) {
   return clamped * AVATAR_RIG.vrAvatarScaleMultiplier;
 }
 
-function applyAvatarTransform(rootNode, worldPos, scaleFactor = 1) {
+function applyAvatarTransform(rootNode, worldPos, scaleFactor = 1, avatarMode = "desktop") {
   if (!rootNode || !worldPos) return;
 
   rootNode.position.set(
@@ -257,6 +263,9 @@ function applyAvatarTransform(rootNode, worldPos, scaleFactor = 1) {
   rootNode.scaling.copyFrom(scaleVector(AVATAR_RIG.avatarScale, scaleFactor));
   rootNode.metadata = rootNode.metadata || {};
   rootNode.metadata.avatarScaleFactor = scaleFactor;
+  rootNode.metadata.avatarMode = avatarMode;
+  rootNode.metadata.floorY =
+    avatarMode === "vr" ? 0 : worldPos.y + AVATAR_RIG.rootOffset.y;
 }
 
 function createArmRig(scene, prefix, root, bodyAnchor) {
@@ -309,6 +318,40 @@ function createArmRig(scene, prefix, root, bodyAnchor) {
   };
 }
 
+function createLegRig(scene, prefix, root, bodyAnchor) {
+  const leftHipAnchor = new BABYLON.TransformNode(`${prefix}LeftHipAnchor`, scene);
+  const rightHipAnchor = new BABYLON.TransformNode(`${prefix}RightHipAnchor`, scene);
+
+  leftHipAnchor.parent = bodyAnchor;
+  rightHipAnchor.parent = bodyAnchor;
+
+  leftHipAnchor.position.copyFrom(AVATAR_RIG.leftHipOffset);
+  rightHipAnchor.position.copyFrom(AVATAR_RIG.rightHipOffset);
+
+  const leftLeg = createArmSegment(
+    scene,
+    `${prefix}LeftLeg`,
+    AVATAR_RIG.legDiameter,
+    new BABYLON.Color3(0.16, 0.16, 0.2)
+  );
+  const rightLeg = createArmSegment(
+    scene,
+    `${prefix}RightLeg`,
+    AVATAR_RIG.legDiameter,
+    new BABYLON.Color3(0.16, 0.16, 0.2)
+  );
+
+  leftLeg.parent = root;
+  rightLeg.parent = root;
+
+  return {
+    leftHipAnchor,
+    rightHipAnchor,
+    leftLeg,
+    rightLeg,
+  };
+}
+
 function updateArmPose(parts, rootNode, side) {
   const isLeft = side === "left";
   const shoulderAnchor = isLeft ? parts.leftShoulderAnchor : parts.rightShoulderAnchor;
@@ -342,8 +385,30 @@ function updateArmPose(parts, rootNode, side) {
   placeLimbSegment(rootNode, lowerArmMesh, elbowWorld, wristWorld);
 }
 
+function updateLegPose(parts, rootNode, side) {
+  const isLeft = side === "left";
+  const hipAnchor = isLeft ? parts.leftHipAnchor : parts.rightHipAnchor;
+  const legMesh = isLeft ? parts.leftLeg : parts.rightLeg;
+
+  if (!hipAnchor || !legMesh || !parts.bodyAnchor) {
+    return;
+  }
+
+  const hipWorld = hipAnchor.getAbsolutePosition();
+  const bodyRight = parts.bodyAnchor.getDirection(BABYLON.Axis.X).normalize();
+  const bodyForward = parts.bodyAnchor.getDirection(BABYLON.Axis.Z).normalize();
+  const worldScale = parts.bodyAnchor.absoluteScaling?.y ?? rootNode.absoluteScaling?.y ?? 1;
+  const floorY = rootNode.metadata?.floorY ?? rootNode.position.y;
+  const footWorld = new BABYLON.Vector3(hipWorld.x, floorY, hipWorld.z)
+    .add(bodyRight.scale((isLeft ? -1 : 1) * AVATAR_RIG.footOutset * worldScale))
+    .add(bodyForward.scale(AVATAR_RIG.footForwardOffset * worldScale));
+
+  placeLimbSegment(rootNode, legMesh, hipWorld, footWorld);
+}
+
 function applyAvatarPose(parts, rootNode, pose) {
   if (!parts || !rootNode || !pose) return;
+  const avatarMode = pose.avatarMode || rootNode.metadata?.avatarMode || "desktop";
 
   if (parts.bodyAnchor) {
     parts.bodyAnchor.position.set(0, 0, 0);
@@ -361,6 +426,11 @@ function applyAvatarPose(parts, rootNode, pose) {
     parts.headAnchor.position.y += AVATAR_RIG.headAnchorYOffset;
     parts.headAnchor.rotationQuaternion = quatFrom(pose.head.rot);
     parts.headAnchor.scaling.copyFrom(AVATAR_RIG.headVisualScale);
+
+    if (parts.bodyAnchor && avatarMode === "desktop") {
+      parts.bodyAnchor.position.y =
+        parts.headAnchor.position.y + AVATAR_RIG.desktopBodyAnchorHeadOffset;
+    }
   }
 
   if (parts.leftHandAnchor && pose.leftHand?.pos && pose.leftHand?.rot) {
@@ -387,6 +457,8 @@ function applyAvatarPose(parts, rootNode, pose) {
 
   updateArmPose(parts, rootNode, "left");
   updateArmPose(parts, rootNode, "right");
+  updateLegPose(parts, rootNode, "left");
+  updateLegPose(parts, rootNode, "right");
 }
 
 async function ensureRemoteMesh(scene, id) {
@@ -416,6 +488,7 @@ async function ensureRemoteMesh(scene, id) {
 
     nameAnchor.position.copyFrom(AVATAR_RIG.nameAnchorOffset);
     const armRig = createArmRig(scene, `remote_${id}_`, root, bodyAnchor);
+    const legRig = createLegRig(scene, `remote_${id}_`, root, bodyAnchor);
 
     const bodyInstance = avatarBodyContainer.instantiateModelsToScene(
       (name) => `${name}_body_${id}`,
@@ -462,10 +535,14 @@ async function ensureRemoteMesh(scene, id) {
       nameAnchor,
       leftShoulderAnchor: armRig.leftShoulderAnchor,
       rightShoulderAnchor: armRig.rightShoulderAnchor,
+      leftHipAnchor: legRig.leftHipAnchor,
+      rightHipAnchor: legRig.rightHipAnchor,
       leftUpperArm: armRig.leftUpperArm,
       leftLowerArm: armRig.leftLowerArm,
       rightUpperArm: armRig.rightUpperArm,
       rightLowerArm: armRig.rightLowerArm,
+      leftLeg: legRig.leftLeg,
+      rightLeg: legRig.rightLeg,
       bodyMesh,
       headMesh,
       leftHandMesh,
@@ -516,6 +593,7 @@ async function ensureLocalAvatar(scene) {
   rightHandAnchor.parent = root;
 
   const armRig = createArmRig(scene, "local_", root, bodyAnchor);
+  const legRig = createLegRig(scene, "local_", root, bodyAnchor);
 
   const bodyInstance = avatarBodyContainer.instantiateModelsToScene(
     (name) => `${name}_body_local`,
@@ -571,10 +649,14 @@ async function ensureLocalAvatar(scene) {
     rightHandAnchor,
     leftShoulderAnchor: armRig.leftShoulderAnchor,
     rightShoulderAnchor: armRig.rightShoulderAnchor,
+    leftHipAnchor: legRig.leftHipAnchor,
+    rightHipAnchor: legRig.rightHipAnchor,
     leftUpperArm: armRig.leftUpperArm,
     leftLowerArm: armRig.leftLowerArm,
     rightUpperArm: armRig.rightUpperArm,
     rightLowerArm: armRig.rightLowerArm,
+    leftLeg: legRig.leftLeg,
+    rightLeg: legRig.rightLeg,
     bodyYaw: 0,
   };
 
@@ -829,11 +911,13 @@ socket.on("playersUpdate", async (players) => {
         p.root?.pos?.y ?? 0,
         p.root?.pos?.z ?? 0
       ),
-      p.root?.scale ?? 1
+      p.root?.scale ?? 1,
+      p.avatarMode || "desktop"
     );
     mesh.rotation.y = 0;
 
     applyAvatarPose(mesh.metadata, mesh, {
+      avatarMode: p.avatarMode || "desktop",
       rootRotY: p.root?.rotY ?? 0,
       head: p.head,
       leftHand: p.leftHand,
@@ -1008,6 +1092,18 @@ export async function launchApp(options = {}) {
         z: cam.rotationQuaternion.z,
         w: cam.rotationQuaternion.w,
       };
+    } else if (cam.rotation) {
+      const camQuat = BABYLON.Quaternion.FromEulerAngles(
+        cam.rotation.x,
+        cam.rotation.y,
+        cam.rotation.z
+      );
+      headRot = {
+        x: camQuat.x,
+        y: camQuat.y,
+        z: camQuat.z,
+        w: camQuat.w,
+      };
     }
 
     let leftHand = {
@@ -1055,8 +1151,16 @@ export async function launchApp(options = {}) {
         ? getAvatarScaleFactorForHeight(Math.max(headWorld.y, 1.0))
         : AVATAR_RIG.desktopAvatarScaleMultiplier;
 
-      applyAvatarTransform(localAvatarParts.root, avatarRootPos, avatarScaleFactor);
+      const avatarMode = xrActive ? "vr" : "desktop";
+
+      applyAvatarTransform(
+        localAvatarParts.root,
+        avatarRootPos,
+        avatarScaleFactor,
+        avatarMode
+      );
       localAvatarParts.avatarScaleFactor = avatarScaleFactor;
+      localAvatarParts.avatarMode = avatarMode;
 
       const headYaw = extractYaw(cam);
 
@@ -1064,8 +1168,8 @@ export async function launchApp(options = {}) {
         localAvatarParts.bodyYaw = headYaw;
       }
 
-      const DEADZONE = BABYLON.Angle.FromDegrees(30).radians();
-      const FOLLOW_SPEED = 4.0;
+      const DEADZONE = BABYLON.Angle.FromDegrees(xrActive ? 30 : 8).radians();
+      const FOLLOW_SPEED = xrActive ? 4.0 : 10.0;
       const dt = engine.getDeltaTime() / 1000;
 
       const yawDelta = normalizeAngle(headYaw - localAvatarParts.bodyYaw);
@@ -1087,6 +1191,7 @@ export async function launchApp(options = {}) {
       }
 
       applyAvatarPose(localAvatarParts, localAvatarParts.root, {
+        avatarMode,
         rootRotY: localAvatarParts.bodyYaw,
         head: {
           pos: headPos,
@@ -1099,6 +1204,7 @@ export async function launchApp(options = {}) {
 
     socket.emit("pose", {
       name: playerName,
+      avatarMode: xrActive ? "vr" : "desktop",
       root: {
         pos: { x: pos.x, y: pos.y, z: pos.z },
         rotY: localAvatarParts?.bodyYaw ?? extractYaw(cam),

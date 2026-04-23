@@ -25,6 +25,7 @@ io.on("connection", (socket) => {
   id: socket.id,
   name: "Player",
   room: "lobby",
+  avatarMode: "desktop",
   root: {
     pos: makeSpawn(),
     rotY: 0,
@@ -57,6 +58,10 @@ io.on("connection", (socket) => {
 
   if (typeof data.name === "string" && data.name.trim()) {
     p.name = data.name.trim().slice(0, 20);
+  }
+
+  if (data.avatarMode === "vr" || data.avatarMode === "desktop") {
+    p.avatarMode = data.avatarMode;
   }
 
   if (data.root?.pos && typeof data.root.pos.x === "number") {
