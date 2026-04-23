@@ -25,9 +25,11 @@ io.on("connection", (socket) => {
   id: socket.id,
   name: "Player",
   room: "lobby",
+  avatarMode: "desktop",
   root: {
     pos: makeSpawn(),
     rotY: 0,
+    scale: 1,
   },
   head: {
     pos: { x: 0, y: 1.6, z: 0 },
@@ -58,6 +60,10 @@ io.on("connection", (socket) => {
     p.name = data.name.trim().slice(0, 20);
   }
 
+  if (data.avatarMode === "vr" || data.avatarMode === "desktop") {
+    p.avatarMode = data.avatarMode;
+  }
+
   if (data.root?.pos && typeof data.root.pos.x === "number") {
     p.root.pos = {
       x: data.root.pos.x,
@@ -68,6 +74,10 @@ io.on("connection", (socket) => {
 
   if (typeof data.root?.rotY === "number") {
     p.root.rotY = data.root.rotY;
+  }
+
+  if (typeof data.root?.scale === "number") {
+    p.root.scale = data.root.scale;
   }
 
   if (data.head?.pos && typeof data.head.pos.x === "number") {
