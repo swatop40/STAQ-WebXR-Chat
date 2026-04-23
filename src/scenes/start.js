@@ -1,4 +1,4 @@
-import { PBRMaterial, Vector3 } from "babylonjs";
+import { PBRMaterial, TransformNode, Vector3 } from "babylonjs";
 import {
   createBaseScene,
   createMirror,
@@ -64,6 +64,13 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, -Math.PI / 5, 0),
     scaling: new Vector3(0.26, 0.26, 0.26),
     interactable: true,
+    interaction: {
+      pickup: true,
+      xrGrabOffset: new Vector3(0, -0.02, 0.02),
+      xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      desktopGrabOffset: new Vector3(0, -0.02, 0.04),
+      desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
+    },
   },
   {
     fileName: "decanter.glb",
@@ -71,6 +78,13 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 9, 0),
     scaling: new Vector3(0.32, 0.32, 0.32),
     interactable: true,
+    interaction: {
+      pickup: true,
+      xrGrabOffset: new Vector3(0, -0.03, 0.03),
+      xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      desktopGrabOffset: new Vector3(0, -0.02, 0.06),
+      desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
+    },
   },
   {
     fileName: "booze_bottle1.glb",
@@ -78,6 +92,13 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, -Math.PI / 10, 0),
     scaling: new Vector3(0.2, 0.2, 0.2),
     interactable: true,
+    interaction: {
+      pickup: true,
+      xrGrabOffset: new Vector3(0, 3.84, 0.02),
+      xrGrabRotation: new Vector3(0, 0, 0),
+      desktopGrabOffset: new Vector3(0, 3.84, 0.04),
+      desktopGrabRotation: new Vector3(0, 0, 0),
+    },
   },
   {
     fileName: "vodka_bottle1.glb",
@@ -85,6 +106,13 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 8, 0),
     scaling: new Vector3(0.2, 0.2, 0.2),
     interactable: true,
+    interaction: {
+      pickup: true,
+      xrGrabOffset: new Vector3(0, -0.02, 0.02),
+      xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      desktopGrabOffset: new Vector3(0, -0.02, 0.04),
+      desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
+    },
   },
   {
     fileName: "microphone.glb",
@@ -92,48 +120,55 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 2.7, Math.PI / 2),
     scaling: new Vector3(0.11, 0.11, 0.11),
     interactable: true,
+    interaction: {
+      pickup: true,
+      xrGrabOffset: new Vector3(0.04, 0, 0),
+      xrGrabRotation: new Vector3(0, 0, -Math.PI / 2),
+      desktopGrabOffset: new Vector3(0.06, -0.01, 0),
+      desktopGrabRotation: new Vector3(0, 0, -Math.PI / 2),
+    },
   },
   {
     fileName: "Bar_Stool.glb",
     position: new Vector3(1.24, 0, 7),
     rotation: new Vector3(0, Math.PI, 0),
     scaling: new Vector3(0.32, 0.32, 0.32),
-    interactable: true,
+    interactable: false,
   },
   {
     fileName: "mic-stand.glb",
     position: new Vector3(4.41, 0, 9.75),
     rotation: new Vector3(0, -Math.PI / 2.7, 0),
     scaling: new Vector3(0.13, 0.13, 0.13),
-    interactable: true,
+    interactable: false,
   },
   {
     fileName: "microphone-and-stand.glb",
     position: new Vector3(-1.97, 0, 8.88),
     rotation: new Vector3(0, Math.PI / 2.8, 0),
     scaling: new Vector3(0.12, 0.12, 0.12),
-    interactable: true,
+    interactable: false,
   },
   {
     fileName: "tv.glb",
     position: new Vector3(0.95, 4.66, 10.93),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.95, 0.95, 0.95),
-    interactable: true,
+    interactable: false,
   },
   {
     fileName: "andy-picture.glb",
     position: new Vector3(-1.25, 2.17, 10.94),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.55, 0.55, 0.55),
-    interactable: true,
+    interactable: false,
   },
   {
     fileName: "sam-picture.glb",
     position: new Vector3(3.15, 2.17, 10.94),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.55, 0.55, 0.55),
-    interactable: true,
+    interactable: false,
   },
   {
     fileName: "avatar-body.glb",
@@ -154,20 +189,45 @@ async function addTestRoomProps(scene) {
     );
 
     if (object.interactable) {
-      markSceneInteractable(result, object.fileName);
+      markSceneInteractable(result, object.fileName, object.interaction);
     }
 
     object.afterPlace?.(result);
   }
 }
 
-function markSceneInteractable(result, itemName) {
+function markSceneInteractable(result, itemName, interaction = {}) {
   const root = result.meshes[0];
   if (!root) return;
+
+  const pickupEnabled = !!interaction.pickup;
+  const xrGrabOffset = interaction.xrGrabOffset?.clone?.()
+    || interaction.grabOffset?.clone?.()
+    || Vector3.Zero();
+  const xrGrabRotation = interaction.xrGrabRotation?.clone?.()
+    || interaction.grabRotation?.clone?.()
+    || Vector3.Zero();
+  const desktopGrabOffset = interaction.desktopGrabOffset?.clone?.()
+    || xrGrabOffset.clone();
+  const desktopGrabRotation = interaction.desktopGrabRotation?.clone?.()
+    || xrGrabRotation.clone();
+  const xrGrabPointNode = pickupEnabled
+    ? createGrabPointNode(root, itemName, "xr", xrGrabOffset, xrGrabRotation)
+    : null;
+  const desktopGrabPointNode = pickupEnabled
+    ? createGrabPointNode(root, itemName, "desktop", desktopGrabOffset, desktopGrabRotation)
+    : null;
 
   root.metadata = {
     ...(root.metadata || {}),
     isSceneInteractable: true,
+    interactionKind: pickupEnabled ? "pickup" : "inspect",
+    pickupEnabled,
+    baseLocalScaling: root.scaling.clone(),
+    xrGrabPointNode,
+    desktopGrabPointNode,
+    xrGrabPointName: xrGrabPointNode?.name || null,
+    desktopGrabPointName: desktopGrabPointNode?.name || null,
     interactableName: itemName,
     interactableRoot: root,
   };
@@ -177,10 +237,30 @@ function markSceneInteractable(result, itemName) {
     mesh.metadata = {
       ...(mesh.metadata || {}),
       isSceneInteractable: true,
+      interactionKind: pickupEnabled ? "pickup" : "inspect",
+      pickupEnabled,
+      baseLocalScaling: root.scaling.clone(),
+      xrGrabPointNode,
+      desktopGrabPointNode,
+      xrGrabPointName: xrGrabPointNode?.name || null,
+      desktopGrabPointName: desktopGrabPointNode?.name || null,
       interactableName: itemName,
       interactableRoot: root,
     };
   }
+}
+
+function createGrabPointNode(root, itemName, mode, grabOffset, grabRotation) {
+  const grabPoint = new TransformNode(`${itemName}_${mode}GrabPoint`, root.getScene());
+  grabPoint.parent = root;
+  grabPoint.position.copyFrom(grabOffset);
+  grabPoint.rotation.copyFrom(grabRotation);
+  grabPoint.metadata = {
+    ...(grabPoint.metadata || {}),
+    isGrabPoint: true,
+    interactableRoot: root,
+  };
+  return grabPoint;
 }
 
 function markDartInteractable(result) {

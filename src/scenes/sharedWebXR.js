@@ -3,6 +3,7 @@ import {
   Color3,
   Mesh,
   MeshBuilder,
+  Matrix,
   MirrorTexture,
   Plane,
   PhysicsImpostor,
@@ -22,10 +23,10 @@ import * as GUI from "babylonjs-gui";
 
 export const DEFAULT_XR_SETTINGS = {
   worldScaleFactor: 1.9,
-  desktopMoveSpeed: 2.6,
-  desktopSprintSpeed: 4.2,
+  desktopMoveSpeed: 5.2,
+  desktopSprintSpeed: 8.4,
   desktopLookSensitivity: 1,
-  xrMoveSpeed: 1.8,
+  xrMoveSpeed: 3.6,
   xrTurnMode: "snap",
   xrSmoothTurnSpeed: 1.8,
   xrSnapTurnAngle: Math.PI / 6,
@@ -158,6 +159,10 @@ function setupDartInteractions(scene, xr, options = {}) {
   const dartGamePanelTransform = options.dartGamePanelTransform || null;
   const dartFlightRotationOffset = Quaternion.FromEulerAngles(0, Math.PI, 0);
   const desktopHeldDartRotation = Quaternion.FromEulerAngles(0.35, 0, -0.22);
+  scene.dartInteractionState = {
+    xrHeldDarts,
+    desktopHold,
+  };
   const dartBoardScoreRings = [
     { maxRadius: 0.12, points: 50, label: "Bullseye" },
     { maxRadius: 0.28, points: 40, label: "Inner Red" },
@@ -951,6 +956,261 @@ function setupDartInteractions(scene, xr, options = {}) {
         const velocity = getControllerThrowVelocity(controllerId, controller);
         releaseDart(dart, velocity);
         xrHeldDarts.delete(controllerId);
+      }
+
+      xrGripStates.set(controllerId, isPressed);
+    }
+  });
+}
+
+function setupObjectInteractions(scene, xr) {
+  const desktopHold = {
+    root: null,
+    anchor: null,
+  };
+  const xrGripStates = new Map();
+  const xrHeldObjects = new Map();
+
+  scene.objectInteractionState = {
+    desktopHold,
+    xrHeldObjects,
+  };
+
+  function getSceneInteractableRoot(mesh) {
+    let current = mesh;
+    while (current) {
+      if (current.metadata?.isSceneInteractable) {
+        return current.metadata.interactableRoot || current;
+      }
+      current = current.parent;
+    }
+    return null;
+  }
+
+  function isPickupRoot(mesh) {
+    const root = getSceneInteractableRoot(mesh);
+    return !!root?.metadata?.pickupEnabled;
+  }
+
+  function setInteractablePickable(root, isPickable) {
+    root.isPickable = isPickable;
+    for (const child of root.getChildMeshes(false)) {
+      child.isPickable = isPickable;
+    }
+  }
+
+  function getControllerRay(controller) {
+    const pointer = controller.pointer || controller.grip;
+    if (!pointer) return null;
+
+    const origin = pointer.getAbsolutePosition();
+    const direction = pointer.getDirection(Axis.Z);
+    if (direction.lengthSquared() < 0.0001) return null;
+
+    direction.normalize();
+    return new Ray(origin, direction, 6);
+  }
+
+  function isGripPressed(controller) {
+    const components = controller.motionController?.components || {};
+    for (const [id, component] of Object.entries(components)) {
+      const normalizedId = id.toLowerCase();
+      if (
+        normalizedId.includes("squeeze") ||
+        normalizedId.includes("grip") ||
+        normalizedId === "xr-standard-squeeze"
+      ) {
+        return !!component.pressed;
+      }
+    }
+
+    const squeezeButton = controller.inputSource?.gamepad?.buttons?.[1];
+    return !!squeezeButton?.pressed;
+  }
+
+  function pickDesktopInteractable() {
+    const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => isPickupRoot(mesh));
+    return pick?.hit ? getSceneInteractableRoot(pick.pickedMesh) : null;
+  }
+
+  function pickInteractableWithRay(ray) {
+    const pick = scene.pickWithRay(ray, (mesh) => isPickupRoot(mesh));
+    return pick?.hit ? getSceneInteractableRoot(pick.pickedMesh) : null;
+  }
+
+  function captureWorldTransform(root) {
+    const matrix = root.computeWorldMatrix(true);
+    const scaling = new Vector3();
+    const rotation = new Quaternion();
+    const position = new Vector3();
+    matrix.decompose(scaling, rotation, position);
+    return { scaling, rotation, position };
+  }
+
+  function getGrabPointLocalTransform(root, mode = "xr") {
+    const grabPoint = mode === "desktop"
+      ? root.metadata?.desktopGrabPointNode
+      : root.metadata?.xrGrabPointNode;
+    if (!grabPoint) {
+      return {
+        position: Vector3.Zero(),
+        rotation: Quaternion.Identity(),
+      };
+    }
+
+    const rotation = grabPoint.rotationQuaternion?.clone() || Quaternion.FromEulerAngles(
+      grabPoint.rotation.x || 0,
+      grabPoint.rotation.y || 0,
+      grabPoint.rotation.z || 0
+    );
+
+    return {
+      position: grabPoint.position.clone(),
+      rotation,
+    };
+  }
+
+  function releaseHeldObject(root) {
+    if (!root) return;
+
+    const worldTransform = captureWorldTransform(root);
+    root.setParent(null);
+    root.position.copyFrom(worldTransform.position);
+    root.scaling.copyFrom(worldTransform.scaling);
+    root.rotationQuaternion = worldTransform.rotation.clone();
+    setInteractablePickable(root, true);
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: false,
+      heldBy: null,
+    };
+  }
+
+  function applyHeldTransformFromGrabPoint(root, mode = "xr") {
+    const grabPoint = getGrabPointLocalTransform(root, mode);
+    const inverseRotation = grabPoint.rotation.clone().normalize();
+    inverseRotation.conjugateInPlace();
+    const inverseRotationMatrix = Matrix.Identity();
+    inverseRotation.toRotationMatrix(inverseRotationMatrix);
+    const scaledGrabOffset = new Vector3(
+      grabPoint.position.x * root.scaling.x,
+      grabPoint.position.y * root.scaling.y,
+      grabPoint.position.z * root.scaling.z
+    );
+    const inversePosition = Vector3.TransformCoordinates(
+      scaledGrabOffset.scale(-1),
+      inverseRotationMatrix
+    );
+    root.position.copyFrom(inversePosition);
+    root.rotationQuaternion = inverseRotation;
+  }
+
+  function holdObject(root, holder, heldBy, mode = "xr") {
+    if (!root || !holder || root.metadata?.isHeld || !root.metadata?.pickupEnabled) return false;
+
+    setInteractablePickable(root, false);
+    root.parent = holder;
+    const baseLocalScaling = root.metadata?.baseLocalScaling;
+    if (baseLocalScaling) {
+      root.scaling.copyFrom(baseLocalScaling);
+    }
+    applyHeldTransformFromGrabPoint(root, mode);
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: true,
+      heldBy,
+    };
+    return true;
+  }
+
+  function holdObjectOnDesktop(root) {
+    const cam = scene.activeCamera;
+    if (!root || !cam) return false;
+
+    const anchor = desktopHold.anchor || new TransformNode("desktopHeldObjectAnchor", scene);
+    desktopHold.anchor = anchor;
+    anchor.parent = cam;
+    anchor.position.set(0.34, -0.30, 1.05);
+    anchor.rotationQuaternion = Quaternion.Identity();
+
+    if (!holdObject(root, anchor, "desktop", "desktop")) return false;
+
+    desktopHold.root = root;
+    return true;
+  }
+
+  function holdObjectOnController(root, controller) {
+    const holder = controller.grip || controller.pointer;
+    if (!holder) return false;
+    return holdObject(root, holder, controller.uniqueId || controller.inputSource?.handedness || "xr", "xr");
+  }
+
+  function releaseDesktopObject() {
+    if (!desktopHold.root) return;
+    releaseHeldObject(desktopHold.root);
+    desktopHold.root = null;
+  }
+
+  scene.onPointerObservable.add((pointerInfo) => {
+    if (isInXR(scene)) return;
+
+    const button = pointerInfo.event?.button;
+    if (pointerInfo.type !== PointerEventTypes.POINTERDOWN || (button != null && button !== 0)) {
+      return;
+    }
+
+    if (scene.dartInteractionState?.desktopHold?.root) return;
+
+    if (desktopHold.root) {
+      releaseDesktopObject();
+      return;
+    }
+
+    const root = pickDesktopInteractable();
+    if (root) {
+      holdObjectOnDesktop(root);
+    }
+  });
+
+  scene.onBeforeRenderObservable.add(() => {
+    if (desktopHold.root && isInXR(scene)) {
+      releaseDesktopObject();
+    }
+  });
+
+  if (!xr) return;
+
+  xr.baseExperience.sessionManager.onXRFrameObservable.add(() => {
+    if (!isInXR(scene)) {
+      for (const root of xrHeldObjects.values()) {
+        releaseHeldObject(root);
+      }
+      xrGripStates.clear();
+      xrHeldObjects.clear();
+      return;
+    }
+
+    for (const controller of xr.input.controllers) {
+      const controllerId = controller.uniqueId || controller.inputSource?.handedness || "unknown";
+      const isPressed = isGripPressed(controller);
+      const wasPressed = xrGripStates.get(controllerId) ?? false;
+
+      if (scene.dartInteractionState?.xrHeldDarts?.has(controllerId)) {
+        xrGripStates.set(controllerId, isPressed);
+        continue;
+      }
+
+      if (isPressed && !wasPressed && !xrHeldObjects.has(controllerId)) {
+        const ray = getControllerRay(controller);
+        const root = ray ? pickInteractableWithRay(ray) : null;
+        if (root && holdObjectOnController(root, controller)) {
+          xrHeldObjects.set(controllerId, root);
+        }
+      }
+
+      if (!isPressed && wasPressed && xrHeldObjects.has(controllerId)) {
+        releaseHeldObject(xrHeldObjects.get(controllerId));
+        xrHeldObjects.delete(controllerId);
       }
 
       xrGripStates.set(controllerId, isPressed);
@@ -1974,6 +2234,7 @@ export async function setupSharedWebXR(scene, options) {
   const mirrorSetup = setupMirror(scene, mirror);
   const menu = setupMenu(scene, xr, applyXRMovementMode, settings);
   setupDartInteractions(scene, xr, options);
+  setupObjectInteractions(scene, xr);
   let lastSnapTurnAt = 0;
 
   function rotateXRView(angle) {
