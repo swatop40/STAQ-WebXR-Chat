@@ -969,6 +969,7 @@ function setupObjectInteractions(scene, xr) {
     anchor: null,
   };
   const xrGripStates = new Map();
+  const xrTriggerStates = new Map();
   const xrHeldObjects = new Map();
 
   scene.objectInteractionState = {
@@ -990,6 +991,11 @@ function setupObjectInteractions(scene, xr) {
   function isPickupRoot(mesh) {
     const root = getSceneInteractableRoot(mesh);
     return !!root?.metadata?.pickupEnabled;
+  }
+
+  function isActivatableRoot(mesh) {
+    const root = getSceneInteractableRoot(mesh);
+    return !!root?.metadata?.activateOnSelect;
   }
 
   function setInteractablePickable(root, isPickable) {
@@ -1028,8 +1034,34 @@ function setupObjectInteractions(scene, xr) {
     return !!squeezeButton?.pressed;
   }
 
+  function isTriggerPressed(controller) {
+    const components = controller.motionController?.components || {};
+    for (const [id, component] of Object.entries(components)) {
+      const normalizedId = id.toLowerCase();
+      if (
+        normalizedId.includes("trigger") ||
+        normalizedId === "xr-standard-trigger"
+      ) {
+        return !!component.pressed;
+      }
+    }
+
+    const triggerButton = controller.inputSource?.gamepad?.buttons?.[0];
+    return !!triggerButton?.pressed;
+  }
+
+  function pickDesktopSceneInteractable() {
+    const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => !!getSceneInteractableRoot(mesh));
+    return pick?.hit ? getSceneInteractableRoot(pick.pickedMesh) : null;
+  }
+
   function pickDesktopInteractable() {
     const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => isPickupRoot(mesh));
+    return pick?.hit ? getSceneInteractableRoot(pick.pickedMesh) : null;
+  }
+
+  function pickSceneInteractableWithRay(ray) {
+    const pick = scene.pickWithRay(ray, (mesh) => !!getSceneInteractableRoot(mesh));
     return pick?.hit ? getSceneInteractableRoot(pick.pickedMesh) : null;
   }
 
@@ -1166,8 +1198,15 @@ function setupObjectInteractions(scene, xr) {
       return;
     }
 
-    const root = pickDesktopInteractable();
-    if (root) {
+    const root = pickDesktopSceneInteractable();
+    if (!root) return;
+
+    if (root.metadata?.activateOnSelect && !root.metadata?.pickupEnabled) {
+      root.metadata.onActivate?.(root, { mode: "desktop" });
+      return;
+    }
+
+    if (root.metadata?.pickupEnabled) {
       holdObjectOnDesktop(root);
     }
   });
@@ -1186,6 +1225,7 @@ function setupObjectInteractions(scene, xr) {
         releaseHeldObject(root);
       }
       xrGripStates.clear();
+      xrTriggerStates.clear();
       xrHeldObjects.clear();
       return;
     }
@@ -1194,9 +1234,12 @@ function setupObjectInteractions(scene, xr) {
       const controllerId = controller.uniqueId || controller.inputSource?.handedness || "unknown";
       const isPressed = isGripPressed(controller);
       const wasPressed = xrGripStates.get(controllerId) ?? false;
+      const isTriggerDown = isTriggerPressed(controller);
+      const wasTriggerDown = xrTriggerStates.get(controllerId) ?? false;
 
       if (scene.dartInteractionState?.xrHeldDarts?.has(controllerId)) {
         xrGripStates.set(controllerId, isPressed);
+        xrTriggerStates.set(controllerId, isTriggerDown);
         continue;
       }
 
@@ -1213,7 +1256,16 @@ function setupObjectInteractions(scene, xr) {
         xrHeldObjects.delete(controllerId);
       }
 
+      if (isTriggerDown && !wasTriggerDown && !xrHeldObjects.has(controllerId)) {
+        const ray = getControllerRay(controller);
+        const root = ray ? pickSceneInteractableWithRay(ray) : null;
+        if (root?.metadata?.activateOnSelect && !root.metadata?.pickupEnabled) {
+          root.metadata.onActivate?.(root, { mode: "xr", controller });
+        }
+      }
+
       xrGripStates.set(controllerId, isPressed);
+      xrTriggerStates.set(controllerId, isTriggerDown);
     }
   });
 }

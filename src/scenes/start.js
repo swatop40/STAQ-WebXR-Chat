@@ -1,9 +1,10 @@
-import { PBRMaterial, TransformNode, Vector3 } from "babylonjs";
+import { PBRMaterial, Vector3 } from "babylonjs";
 import {
   createBaseScene,
   createMirror,
   createStaticWall,
   loadSceneModel,
+  markSceneInteractable,
   placeObjectModel,
 } from "./sceneSetup.js";
 import { setupSharedWebXR } from "./sharedWebXR.js";
@@ -11,6 +12,7 @@ import { setupSharedWebXR } from "./sharedWebXR.js";
 const TABLE_POSITION = new Vector3(1.23, 1.59, 8.87);
 const TABLE_ROTATION = new Vector3(0, Math.PI / 2, 0);
 const TABLE_TOP_Y = 1.76;
+const pictureSwapResults = new Map();
 const TEST_ROOM_OBJECTS = [
   {
     fileName: "table.glb",
@@ -161,14 +163,26 @@ const TEST_ROOM_OBJECTS = [
     position: new Vector3(-1.25, 2.17, 10.94),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.55, 0.55, 0.55),
-    interactable: false,
+    interactable: true,
+    interaction: {
+      activateOnSelect: true,
+    },
+    afterPlace: (result) => {
+      registerPictureSwapResult("andy-picture.glb", result);
+    },
   },
   {
     fileName: "sam-picture.glb",
     position: new Vector3(3.15, 2.17, 10.94),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.55, 0.55, 0.55),
-    interactable: false,
+    interactable: true,
+    interaction: {
+      activateOnSelect: true,
+    },
+    afterPlace: (result) => {
+      registerPictureSwapResult("sam-picture.glb", result);
+    },
   },
   {
     fileName: "avatar-body.glb",
@@ -196,73 +210,6 @@ async function addTestRoomProps(scene) {
   }
 }
 
-function markSceneInteractable(result, itemName, interaction = {}) {
-  const root = result.meshes[0];
-  if (!root) return;
-
-  const pickupEnabled = !!interaction.pickup;
-  const xrGrabOffset = interaction.xrGrabOffset?.clone?.()
-    || interaction.grabOffset?.clone?.()
-    || Vector3.Zero();
-  const xrGrabRotation = interaction.xrGrabRotation?.clone?.()
-    || interaction.grabRotation?.clone?.()
-    || Vector3.Zero();
-  const desktopGrabOffset = interaction.desktopGrabOffset?.clone?.()
-    || xrGrabOffset.clone();
-  const desktopGrabRotation = interaction.desktopGrabRotation?.clone?.()
-    || xrGrabRotation.clone();
-  const xrGrabPointNode = pickupEnabled
-    ? createGrabPointNode(root, itemName, "xr", xrGrabOffset, xrGrabRotation)
-    : null;
-  const desktopGrabPointNode = pickupEnabled
-    ? createGrabPointNode(root, itemName, "desktop", desktopGrabOffset, desktopGrabRotation)
-    : null;
-
-  root.metadata = {
-    ...(root.metadata || {}),
-    isSceneInteractable: true,
-    interactionKind: pickupEnabled ? "pickup" : "inspect",
-    pickupEnabled,
-    baseLocalScaling: root.scaling.clone(),
-    xrGrabPointNode,
-    desktopGrabPointNode,
-    xrGrabPointName: xrGrabPointNode?.name || null,
-    desktopGrabPointName: desktopGrabPointNode?.name || null,
-    interactableName: itemName,
-    interactableRoot: root,
-  };
-
-  for (const mesh of result.meshes) {
-    mesh.isPickable = true;
-    mesh.metadata = {
-      ...(mesh.metadata || {}),
-      isSceneInteractable: true,
-      interactionKind: pickupEnabled ? "pickup" : "inspect",
-      pickupEnabled,
-      baseLocalScaling: root.scaling.clone(),
-      xrGrabPointNode,
-      desktopGrabPointNode,
-      xrGrabPointName: xrGrabPointNode?.name || null,
-      desktopGrabPointName: desktopGrabPointNode?.name || null,
-      interactableName: itemName,
-      interactableRoot: root,
-    };
-  }
-}
-
-function createGrabPointNode(root, itemName, mode, grabOffset, grabRotation) {
-  const grabPoint = new TransformNode(`${itemName}_${mode}GrabPoint`, root.getScene());
-  grabPoint.parent = root;
-  grabPoint.position.copyFrom(grabOffset);
-  grabPoint.rotation.copyFrom(grabRotation);
-  grabPoint.metadata = {
-    ...(grabPoint.metadata || {}),
-    isGrabPoint: true,
-    interactableRoot: root,
-  };
-  return grabPoint;
-}
-
 function markDartInteractable(result) {
   const root = result.meshes[0];
   if (!root) return;
@@ -281,6 +228,48 @@ function markDartInteractable(result) {
       dartRoot: root,
     };
   }
+}
+
+function registerPictureSwapResult(key, result) {
+  pictureSwapResults.set(key, result);
+  if (pictureSwapResults.size < 2) return;
+
+  const andyResult = pictureSwapResults.get("andy-picture.glb");
+  const samResult = pictureSwapResults.get("sam-picture.glb");
+  if (!andyResult || !samResult) return;
+
+  configurePictureSwap(andyResult, samResult);
+  configurePictureSwap(samResult, andyResult);
+}
+
+function configurePictureSwap(primaryResult, alternateResult) {
+  const primaryRoot = primaryResult.meshes[0];
+  if (primaryRoot?.metadata?.pictureSwapConfigured) return;
+  const primaryPictureMesh = findPictureSurfaceMesh(primaryResult);
+  if (!primaryRoot || !primaryPictureMesh) return;
+
+  primaryRoot.metadata = {
+    ...(primaryRoot.metadata || {}),
+    activateOnSelect: true,
+    pictureSwapConfigured: true,
+    onActivate: () => {
+      primaryPictureMesh.setEnabled(!primaryPictureMesh.isEnabled());
+    },
+  };
+
+  for (const mesh of primaryResult.meshes) {
+    mesh.isPickable = true;
+    mesh.metadata = {
+      ...(mesh.metadata || {}),
+      activateOnSelect: true,
+      onActivate: primaryRoot.metadata.onActivate,
+      interactableRoot: primaryRoot,
+    };
+  }
+}
+
+function findPictureSurfaceMesh(result) {
+  return result.meshes.find((mesh) => mesh.material?.name?.toLowerCase?.().includes("-prof")) || null;
 }
 
 function markDartBoardTarget(result) {
