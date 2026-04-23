@@ -24,6 +24,7 @@ export const DEFAULT_XR_SETTINGS = {
   worldScaleFactor: 1.9,
   desktopMoveSpeed: 2.6,
   desktopSprintSpeed: 4.2,
+  desktopLookSensitivity: 1,
   xrMoveSpeed: 1.8,
   xrTurnMode: "snap",
   xrSmoothTurnSpeed: 1.8,
@@ -1031,6 +1032,30 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   settingsPanel.addRowDefinition(1);
   menuCard.addControl(settingsPanel);
 
+  const desktopControlsPanel = new GUI.Grid("desktopControlsGrid");
+  desktopControlsPanel.width = "97%";
+  desktopControlsPanel.height = "86%";
+  desktopControlsPanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  desktopControlsPanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  desktopControlsPanel.isVisible = false;
+  for (let i = 0; i < 6; i += 1) {
+    desktopControlsPanel.addColumnDefinition(1 / 6);
+  }
+  desktopControlsPanel.addRowDefinition(1);
+  menuCard.addControl(desktopControlsPanel);
+
+  const vrControlsPanel = new GUI.Grid("vrControlsGrid");
+  vrControlsPanel.width = "97%";
+  vrControlsPanel.height = "86%";
+  vrControlsPanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  vrControlsPanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  vrControlsPanel.isVisible = false;
+  for (let i = 0; i < 6; i += 1) {
+    vrControlsPanel.addColumnDefinition(1 / 6);
+  }
+  vrControlsPanel.addRowDefinition(1);
+  menuCard.addControl(vrControlsPanel);
+
   const volumePanel = new GUI.Grid("volumeMenuGrid");
   volumePanel.width = "97%";
   volumePanel.height = "86%";
@@ -1043,12 +1068,56 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   volumePanel.addRowDefinition(1);
   menuCard.addControl(volumePanel);
 
+  const listBoard = MeshBuilder.CreatePlane(
+    "menuListBoard",
+    { width: 1.98, height: 0.92, sideOrientation: Mesh.DOUBLESIDE },
+    scene
+  );
+  listBoard.parent = menuHost;
+  listBoard.position.set(0, 0.66, 0.02);
+  listBoard.isPickable = true;
+  listBoard.setEnabled(false);
+
+  const listTexture = GUI.AdvancedDynamicTexture.CreateForMesh(
+    listBoard,
+    3328,
+    1536,
+    false
+  );
+
+  const listCard = new GUI.Rectangle("menuListCard");
+  listCard.width = "99.2%";
+  listCard.height = "94%";
+  listCard.thickness = 3;
+  listCard.cornerRadius = 28;
+  listCard.color = "#bfd0df";
+  listCard.background = "#0d1a29F2";
+  listTexture.addControl(listCard);
+
+  const mutePanel = new GUI.Grid("muteMenuGrid");
+  mutePanel.width = "97%";
+  mutePanel.height = "88%";
+  mutePanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  mutePanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  mutePanel.isVisible = false;
+  for (let i = 0; i < 4; i += 1) {
+    mutePanel.addColumnDefinition(1 / 4);
+  }
+  mutePanel.addRowDefinition(0.5);
+  mutePanel.addRowDefinition(0.5);
+  listCard.addControl(mutePanel);
+
   let menuButtonIndex = 0;
   let settingsButtonIndex = 0;
+  let desktopButtonIndex = 0;
+  let vrButtonIndex = 0;
   let volumeButtonIndex = 0;
+  let muteButtonIndex = 0;
   let pendingLeaveAction = null;
+  const menuButtonFontSize = 76;
+  const listButtonFontSize = 76;
 
-  function styleMenuButton(button, fontSize = 72, background = "#4e6f8d") {
+  function styleMenuButton(button, fontSize = menuButtonFontSize, background = "#4e6f8d") {
     button.width = "95%";
     button.height = "96%";
     button.thickness = 2;
@@ -1078,42 +1147,116 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     return button;
   }
 
-  function addSettingsButton(text, callback) {
+  function addSettingsButton(text, callback, row = null, column = null, fontSize = menuButtonFontSize, background = "#4e6f8d") {
     const button = GUI.Button.CreateSimpleButton(controlName(text, "settings_btn"), text);
-    styleMenuButton(button);
+    styleMenuButton(button, fontSize, background);
     button.onPointerUpObservable.add(callback);
-    settingsPanel.addControl(button, 0, settingsButtonIndex);
-    settingsButtonIndex += 1;
+    const targetIndex = row == null || column == null ? settingsButtonIndex : row * 6 + column;
+    settingsPanel.addControl(button, Math.floor(targetIndex / 6), targetIndex % 6);
+    settingsButtonIndex = Math.max(settingsButtonIndex, targetIndex + 1);
     return button;
   }
 
-  function addVolumeButton(text, callback) {
-    const button = GUI.Button.CreateSimpleButton(controlName(text, "volume_btn"), text);
-    styleMenuButton(button);
+  function addDesktopButton(text, callback, row = null, column = null, fontSize = menuButtonFontSize, background = "#4e6f8d") {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "desktop_btn"), text);
+    styleMenuButton(button, fontSize, background);
     button.onPointerUpObservable.add(callback);
-    volumePanel.addControl(button, 0, volumeButtonIndex);
-    volumeButtonIndex += 1;
+    const targetIndex = row == null || column == null ? desktopButtonIndex : row * 6 + column;
+    desktopControlsPanel.addControl(button, Math.floor(targetIndex / 6), targetIndex % 6);
+    desktopButtonIndex = Math.max(desktopButtonIndex, targetIndex + 1);
+    return button;
+  }
+
+  function addVRButton(text, callback, row = null, column = null, fontSize = menuButtonFontSize, background = "#4e6f8d") {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "vr_btn"), text);
+    styleMenuButton(button, fontSize, background);
+    button.onPointerUpObservable.add(callback);
+    const targetIndex = row == null || column == null ? vrButtonIndex : row * 6 + column;
+    vrControlsPanel.addControl(button, Math.floor(targetIndex / 6), targetIndex % 6);
+    vrButtonIndex = Math.max(vrButtonIndex, targetIndex + 1);
+    return button;
+  }
+
+  function addVolumeButton(text, callback, row = null, column = null, fontSize = menuButtonFontSize, background = "#4e6f8d") {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "volume_btn"), text);
+    styleMenuButton(button, fontSize, background);
+    button.onPointerUpObservable.add(callback);
+    const targetIndex = row == null || column == null ? volumeButtonIndex : row * 6 + column;
+    volumePanel.addControl(button, Math.floor(targetIndex / 6), targetIndex % 6);
+    volumeButtonIndex = Math.max(volumeButtonIndex, targetIndex + 1);
+    return button;
+  }
+
+  function addMuteButton(text, callback, row = null, column = null, fontSize = listButtonFontSize, background = "#4e6f8d") {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "mute_btn"), text);
+    styleMenuButton(button, fontSize, background);
+    button.width = "76%";
+    button.height = "62%";
+    button.onPointerUpObservable.add(callback);
+    const targetIndex = row == null || column == null ? muteButtonIndex : row * 4 + column;
+    mutePanel.addControl(button, Math.floor(targetIndex / 4), targetIndex % 4);
+    muteButtonIndex = Math.max(muteButtonIndex, targetIndex + 1);
     return button;
   }
 
   function showMainPanel() {
     menuPanel.isVisible = true;
     settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
   function showSettingsPanel() {
     menuPanel.isVisible = false;
     settingsPanel.isVisible = true;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
+    leaveConfirmPanel.isVisible = false;
+  }
+
+  function showDesktopControlsPanel() {
+    menuPanel.isVisible = false;
+    settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = true;
+    vrControlsPanel.isVisible = false;
+    volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
+    leaveConfirmPanel.isVisible = false;
+  }
+
+  function showVRControlsPanel() {
+    menuPanel.isVisible = false;
+    settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = true;
+    volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
   function showVolumePanel() {
     menuPanel.isVisible = false;
     settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = false;
     volumePanel.isVisible = true;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
+    leaveConfirmPanel.isVisible = false;
+  }
+
+  function showMutePanel() {
+    listBoard.setEnabled(true);
+    mutePanel.isVisible = true;
     leaveConfirmPanel.isVisible = false;
   }
 
@@ -1152,12 +1295,16 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     pendingLeaveAction = action;
     menuPanel.isVisible = false;
     settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = true;
   }
 
   const leaveYesButton = GUI.Button.CreateSimpleButton("leaveYes_btn", "Yes");
-  styleMenuButton(leaveYesButton, 82, "#2f7d5f");
+  styleMenuButton(leaveYesButton, menuButtonFontSize, "#2f7d5f");
   leaveYesButton.width = "92%";
   leaveYesButton.height = "92%";
   leaveYesButton.onPointerUpObservable.add(() => {
@@ -1168,7 +1315,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   leaveConfirmPanel.addControl(leaveYesButton, 1, 0);
 
   const leaveNoButton = GUI.Button.CreateSimpleButton("leaveNo_btn", "No");
-  styleMenuButton(leaveNoButton, 82, "#7c3f48");
+  styleMenuButton(leaveNoButton, menuButtonFontSize, "#7c3f48");
   leaveNoButton.width = "92%";
   leaveNoButton.height = "92%";
   leaveNoButton.onPointerUpObservable.add(showMainMenuPanel);
@@ -1242,12 +1389,57 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     return "Open Mic";
   }
 
+  function speedLabel(value) {
+    return value.toFixed(1);
+  }
+
+  function sensitivityLabel(value) {
+    return `${Math.round(value * 100)}%`;
+  }
+
+  function clampSetting(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function applyDesktopLookSensitivity() {
+    const mouseInput = scene.desktopMouseInput;
+    if (!mouseInput) return;
+
+    const sensibility = 2000 / Math.max(settings.desktopLookSensitivity, 0.1);
+    mouseInput.angularSensibilityX = sensibility;
+    mouseInput.angularSensibilityY = sensibility;
+  }
+
+  let locomotionButton = null;
+  let turnModeButton = null;
+  let desktopSpeedDownButton = null;
+  let desktopSpeedUpButton = null;
+  let desktopLookDownButton = null;
+  let desktopLookUpButton = null;
+  let xrSpeedDownButton = null;
+  let xrSpeedUpButton = null;
+  let xrTurnSpeedDownButton = null;
+  let xrTurnSpeedUpButton = null;
+  let micModeButton = null;
+
   function updateSettingsLabels() {
-    locomotionButton.textBlock.text =
-      scene.navigation.xrMode === "teleport" ? "Locomotion: Teleport" : "Locomotion: Smooth";
-    turnModeButton.textBlock.text =
-      scene.navigation.xrTurnMode === "smooth" ? "Turning: Smooth" : "Turning: Snap";
-    micModeButton.textBlock.text = getMicModeLabel();
+    if (locomotionButton) {
+      locomotionButton.textBlock.text =
+        scene.navigation.xrMode === "teleport" ? "Locomotion\nTeleport" : "Locomotion\nSmooth";
+    }
+    if (turnModeButton) {
+      turnModeButton.textBlock.text =
+        scene.navigation.xrTurnMode === "smooth" ? "Turning\nSmooth" : "Turning\nSnap";
+    }
+    if (desktopSpeedDownButton) desktopSpeedDownButton.textBlock.text = `Desktop Move\n${speedLabel(settings.desktopMoveSpeed)} -`;
+    if (desktopSpeedUpButton) desktopSpeedUpButton.textBlock.text = `Desktop Move\n${speedLabel(settings.desktopMoveSpeed)} +`;
+    if (desktopLookDownButton) desktopLookDownButton.textBlock.text = `Desktop Look\n${sensitivityLabel(settings.desktopLookSensitivity)} -`;
+    if (desktopLookUpButton) desktopLookUpButton.textBlock.text = `Desktop Look\n${sensitivityLabel(settings.desktopLookSensitivity)} +`;
+    if (xrSpeedDownButton) xrSpeedDownButton.textBlock.text = `VR Move\n${speedLabel(settings.xrMoveSpeed)} -`;
+    if (xrSpeedUpButton) xrSpeedUpButton.textBlock.text = `VR Move\n${speedLabel(settings.xrMoveSpeed)} +`;
+    if (xrTurnSpeedDownButton) xrTurnSpeedDownButton.textBlock.text = `VR Turn\n${speedLabel(settings.xrSmoothTurnSpeed)} -`;
+    if (xrTurnSpeedUpButton) xrTurnSpeedUpButton.textBlock.text = `VR Turn\n${speedLabel(settings.xrSmoothTurnSpeed)} +`;
+    if (micModeButton) micModeButton.textBlock.text = getMicModeLabel();
   }
 
   function getVolumeLabels() {
@@ -1265,6 +1457,53 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     playerVolumeUpButton.textBlock.text = `${labels.players}\n+`;
   }
 
+  function rebuildMutePanel() {
+    mutePanel.clearControls();
+    muteButtonIndex = 0;
+    const players = scene.audioControls?.listRemotePlayers?.() || [];
+
+    if (!players.length) {
+      const emptyButton = addMuteButton("No Players\nBack", () => {
+        updateVolumeLabels();
+        showVolumePanel();
+      }, 0, 0, listButtonFontSize, "#5b6b7c");
+      emptyButton.width = "98%";
+    } else {
+      players.slice(0, 7).forEach((player) => {
+        const text = `${player.muted ? "Unmute" : "Mute"}\n${player.name}`;
+        addMuteButton(text, () => {
+          scene.audioControls?.toggleRemoteMute?.(player.id);
+          rebuildMutePanel();
+        });
+      });
+    }
+
+    addMuteButton("Back", () => {
+      updateVolumeLabels();
+      showVolumePanel();
+    }, 1, 3, listButtonFontSize, "#5b6b7c");
+  }
+
+  function rebuildPlayerListPanel() {
+    mutePanel.clearControls();
+    muteButtonIndex = 0;
+    const players = scene.audioControls?.listRemotePlayers?.() || [];
+
+    if (!players.length) {
+      addMuteButton("No Players\nBack", showMainMenuPanel, 0, 0, listButtonFontSize, "#5b6b7c");
+    } else {
+      players.slice(0, 7).forEach((player) => {
+        const text = `${player.muted ? "Unmute" : "Mute"}\n${player.name}`;
+        addMuteButton(text, () => {
+          scene.audioControls?.toggleRemoteMute?.(player.id);
+          rebuildPlayerListPanel();
+        }, null, null, listButtonFontSize, player.muted ? "#7c3f48" : "#4e6f8d");
+      });
+    }
+
+    addMuteButton("Back", showMainMenuPanel, 1, 3, listButtonFontSize, "#5b6b7c");
+  }
+
   addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
   addMenuButton("Emotes", () => console.log("Open emotes clicked"));
   addMenuButton("Settings", () => {
@@ -1276,72 +1515,130 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
       navigateAfterXRExit("/choose-scene.html");
     });
   });
-  addMenuButton("Exit Website", () => {
-    showLeaveConfirm(() => {
-      navigateAfterXRExit("https://google.com");
-    });
+  addMenuButton("Players", () => {
+    rebuildPlayerListPanel();
+    showMutePanel();
   });
   addMenuButton("Close The Menu", hideMenu);
 
-  const locomotionButton = addSettingsButton("Locomotion: Smooth", () => {
+  locomotionButton = addSettingsButton("Locomotion\nSmooth", () => {
     const nextMode = scene.navigation.toggleXRMode();
     applyXRMovementMode();
     console.log(`[SETTINGS] XR locomotion set to ${nextMode}`);
     updateSettingsLabels();
-  });
+  }, 0, 0);
 
-  const turnModeButton = addSettingsButton("Turning: Snap", () => {
+  turnModeButton = addSettingsButton("Turning\nSnap", () => {
     const nextMode = scene.navigation.toggleXRTurnMode();
     console.log(`[SETTINGS] XR turning set to ${nextMode}`);
     updateSettingsLabels();
-  });
+  }, 0, 1);
 
-  addSettingsButton("Volume Settings", () => {
+  addSettingsButton("Desktop\nControls", () => {
+    updateSettingsLabels();
+    showDesktopControlsPanel();
+  }, 0, 2);
+
+  addSettingsButton("VR\nControls", () => {
+    updateSettingsLabels();
+    showVRControlsPanel();
+  }, 0, 3);
+
+  addSettingsButton("Audio", () => {
     updateVolumeLabels();
     showVolumePanel();
-  });
+  }, 0, 4);
 
-  const micModeButton = addSettingsButton("Open Mic", () => {
-    scene.voiceControls?.cycleMicMode?.();
+  addSettingsButton("Back", showMainMenuPanel, 0, 5, menuButtonFontSize, "#5b6b7c");
+
+  desktopSpeedDownButton = addDesktopButton("Move Speed\n-", () => {
+    settings.desktopMoveSpeed = clampSetting(settings.desktopMoveSpeed - 0.2, 0.8, 8);
     updateSettingsLabels();
-  });
+  }, 0, 0);
 
-  addSettingsButton("Settings", () => {
-    console.log("[SETTINGS] More settings coming soon");
-  });
+  desktopSpeedUpButton = addDesktopButton("Move Speed\n+", () => {
+    settings.desktopMoveSpeed = clampSetting(settings.desktopMoveSpeed + 0.2, 0.8, 8);
+    updateSettingsLabels();
+  }, 0, 1);
 
-  addSettingsButton("Back", () => {
-    showMainMenuPanel();
-  });
+  desktopLookDownButton = addDesktopButton("Look Sens\n-", () => {
+    settings.desktopLookSensitivity = clampSetting(settings.desktopLookSensitivity - 0.1, 0.2, 3);
+    applyDesktopLookSensitivity();
+    updateSettingsLabels();
+  }, 0, 2);
+
+  desktopLookUpButton = addDesktopButton("Look Sens\n+", () => {
+    settings.desktopLookSensitivity = clampSetting(settings.desktopLookSensitivity + 0.1, 0.2, 3);
+    applyDesktopLookSensitivity();
+    updateSettingsLabels();
+  }, 0, 3);
+
+  addDesktopButton("Settings", () => {
+    updateSettingsLabels();
+    showSettingsPanel();
+  }, 0, 4, menuButtonFontSize, "#5b6b7c");
+
+  addDesktopButton("Back", showMainMenuPanel, 0, 5, menuButtonFontSize, "#5b6b7c");
+
+  xrSpeedDownButton = addVRButton("Move Speed\n-", () => {
+    settings.xrMoveSpeed = clampSetting(settings.xrMoveSpeed - 0.2, 0.4, 6);
+    updateSettingsLabels();
+  }, 0, 0);
+
+  xrSpeedUpButton = addVRButton("Move Speed\n+", () => {
+    settings.xrMoveSpeed = clampSetting(settings.xrMoveSpeed + 0.2, 0.4, 6);
+    updateSettingsLabels();
+  }, 0, 1);
+
+  xrTurnSpeedDownButton = addVRButton("Turn Speed\n-", () => {
+    settings.xrSmoothTurnSpeed = clampSetting(settings.xrSmoothTurnSpeed - 0.2, 0.4, 5);
+    updateSettingsLabels();
+  }, 0, 2);
+
+  xrTurnSpeedUpButton = addVRButton("Turn Speed\n+", () => {
+    settings.xrSmoothTurnSpeed = clampSetting(settings.xrSmoothTurnSpeed + 0.2, 0.4, 5);
+    updateSettingsLabels();
+  }, 0, 3);
+
+  addVRButton("Settings", () => {
+    updateSettingsLabels();
+    showSettingsPanel();
+  }, 0, 4, menuButtonFontSize, "#5b6b7c");
+
+  addVRButton("Back", showMainMenuPanel, 0, 5, menuButtonFontSize, "#5b6b7c");
 
   const sceneVolumeDownButton = addVolumeButton("Scene Vol\n-", () => {
     scene.audioControls?.adjustSceneVolume?.(-0.1);
     updateVolumeLabels();
-  });
+  }, 0, 0);
 
   const sceneVolumeUpButton = addVolumeButton("Scene Vol\n+", () => {
     scene.audioControls?.adjustSceneVolume?.(0.1);
     updateVolumeLabels();
-  });
+  }, 0, 1);
 
   const playerVolumeDownButton = addVolumeButton("Player Vol\n-", () => {
     scene.audioControls?.adjustPlayerVolume?.(-0.1);
     updateVolumeLabels();
-  });
+  }, 0, 2);
 
   const playerVolumeUpButton = addVolumeButton("Player Vol\n+", () => {
     scene.audioControls?.adjustPlayerVolume?.(0.1);
     updateVolumeLabels();
-  });
+  }, 0, 3);
 
-  addVolumeButton("Volume", () => {
-    console.log("[SETTINGS] Volume controls adjust in 10% steps");
-  });
+  micModeButton = addVolumeButton("Open Mic", () => {
+    scene.voiceControls?.cycleMicMode?.();
+    updateSettingsLabels();
+  }, 0, 4);
 
   addVolumeButton("Back", () => {
     updateSettingsLabels();
     showSettingsPanel();
-  });
+  }, 0, 5, menuButtonFontSize, "#5b6b7c");
+
+  applyDesktopLookSensitivity();
+  updateSettingsLabels();
 
   function getMenuCamera() {
     return isInXR(scene)

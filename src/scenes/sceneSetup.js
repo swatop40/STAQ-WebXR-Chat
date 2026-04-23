@@ -105,6 +105,7 @@ export function createBaseScene(engine, options = {}) {
   const mouseInput = new BABYLON.FreeCameraMouseInput();
   mouseInput.buttons = [2];
   camera.inputs.add(mouseInput);
+  scene.desktopMouseInput = mouseInput;
 
   const canvas = scene.getEngine().getRenderingCanvas();
   canvas?.addEventListener("contextmenu", (event) => event.preventDefault());

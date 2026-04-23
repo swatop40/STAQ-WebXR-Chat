@@ -123,8 +123,11 @@ let micMode = "open";
 let pushToTalkPressed = false;
 let sceneVolume = 1;
 let playerVolume = 1;
+let vrAvatarHeightOverride = null;
 const peerConnections = new Map();
 const remoteAudioEls = new Map();
+const remotePlayerNames = new Map();
+const mutedRemoteIds = new Set();
 
 function clamp01(value) {
   return Math.min(1, Math.max(0, value));
@@ -198,6 +201,53 @@ function createAudioControls() {
       applyPlayerVolume();
       console.log(`[AUDIO] Player volume: ${getPercentLabel(playerVolume)}`);
       return playerVolume;
+    },
+    listRemotePlayers() {
+      return [...remotePlayerNames.entries()].map(([id, name]) => ({
+        id,
+        name,
+        muted: mutedRemoteIds.has(id) || !!remoteAudioEls.get(id)?.muted,
+      }));
+    },
+    toggleRemoteMute(id) {
+      if (!id) return false;
+
+      const audio = remoteAudioEls.get(id);
+      const nextMuted = !(mutedRemoteIds.has(id) || !!audio?.muted);
+
+      if (nextMuted) {
+        mutedRemoteIds.add(id);
+      } else {
+        mutedRemoteIds.delete(id);
+      }
+
+      if (audio) {
+        audio.muted = nextMuted;
+      }
+
+      console.log(`[AUDIO] ${nextMuted ? "Muted" : "Unmuted"} ${remotePlayerNames.get(id) || id}`);
+      return nextMuted;
+    },
+  };
+}
+
+function createAvatarControls() {
+  return {
+    autoHeightFromXR() {
+      const camera = sceneRef?.xrHelper?.baseExperience?.camera || sceneRef?.activeCamera;
+      const height = Math.max(camera?.globalPosition?.y ?? camera?.position?.y ?? 1, 1);
+      vrAvatarHeightOverride = height;
+      console.log(`[AVATAR] Auto height calibrated to ${height.toFixed(2)}m`);
+      return height;
+    },
+    clearAutoHeight() {
+      vrAvatarHeightOverride = null;
+      console.log("[AVATAR] Auto height calibration cleared");
+    },
+    getAutoHeightLabel() {
+      return vrAvatarHeightOverride == null
+        ? "Auto Height"
+        : `Height: ${vrAvatarHeightOverride.toFixed(2)}m`;
     },
   };
 }
@@ -839,6 +889,7 @@ async function ensureLocalAvatar(scene) {
 
 function ensureRemoteNameLabel(id, mesh, name = "Player") {
   const anchor = mesh.metadata?.nameAnchor || mesh;
+  remotePlayerNames.set(id, name);
 
   let label = remoteNameLabels.get(id);
   if (label) {
@@ -876,6 +927,7 @@ function removeRemoteNameLabel(id) {
     label.rect.dispose();
     remoteNameLabels.delete(id);
   }
+  remotePlayerNames.delete(id);
 }
 
 function removeRemoteMesh(id) {
@@ -903,6 +955,7 @@ function removePeerConnection(id) {
     audio.remove();
     remoteAudioEls.delete(id);
   }
+  mutedRemoteIds.delete(id);
 }
 
 function extractYaw(camera) {
@@ -973,6 +1026,7 @@ function createPeerConnection(targetId) {
       audio.controls = false;
       audio.style.display = "none";
       audio.volume = playerVolume;
+      audio.muted = mutedRemoteIds.has(targetId);
       document.body.appendChild(audio);
       remoteAudioEls.set(targetId, audio);
     }
@@ -1216,6 +1270,7 @@ export async function launchApp(options = {}) {
   sceneRef = scene;
   scene.voiceControls = createVoiceControls();
   scene.audioControls = createAudioControls();
+  scene.avatarControls = createAvatarControls();
   uiTexture = GUI.AdvancedDynamicTexture.CreateFullscreenUI("nameUI", true, scene);
 
   await ensureLocalAvatar(scene);
@@ -1313,7 +1368,7 @@ export async function launchApp(options = {}) {
     if (localAvatarParts) {
       const avatarRootPos = pos.clone();
       const avatarScaleFactor = xrActive
-        ? getAvatarScaleFactorForHeight(Math.max(headWorld.y, 1.0))
+        ? getAvatarScaleFactorForHeight(vrAvatarHeightOverride ?? Math.max(headWorld.y, 1.0))
         : AVATAR_RIG.desktopAvatarScaleMultiplier;
 
       const avatarMode = xrActive ? "vr" : "desktop";
