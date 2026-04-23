@@ -3,6 +3,7 @@ import {
   Color3,
   Mesh,
   MeshBuilder,
+  Matrix,
   MirrorTexture,
   Plane,
   PhysicsImpostor,
@@ -22,9 +23,10 @@ import * as GUI from "babylonjs-gui";
 
 export const DEFAULT_XR_SETTINGS = {
   worldScaleFactor: 1.9,
-  desktopMoveSpeed: 2.6,
-  desktopSprintSpeed: 4.2,
-  xrMoveSpeed: 1.8,
+  desktopMoveSpeed: 5.2,
+  desktopSprintSpeed: 8.4,
+  desktopLookSensitivity: 1,
+  xrMoveSpeed: 3.6,
   xrTurnMode: "snap",
   xrSmoothTurnSpeed: 1.8,
   xrSnapTurnAngle: Math.PI / 6,
@@ -50,6 +52,14 @@ const MOVE_KEYS = [
   "shift",
 ];
 
+const PUSH_TO_TALK_KEY = "v";
+const PUSH_TO_TALK_FACE_BUTTON_IDS = new Set([
+  "b-button",
+  "y-button",
+  "button-b",
+  "button-y",
+]);
+
 function isInXR(scene) {
   return scene.xrHelper?.baseExperience?.state === WebXRState.IN_XR;
 }
@@ -67,6 +77,11 @@ function getThumbstickAxes(controller) {
 function isMobileBrowser() {
   return /Android|iPad|iPhone|iPod/i.test(navigator.userAgent) ||
     (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
+}
+
+function isTypingTarget(target) {
+  const tagName = target?.tagName?.toLowerCase?.();
+  return tagName === "input" || tagName === "textarea" || target?.isContentEditable;
 }
 
 function worldToLocalPosition(node, worldPos) {
@@ -109,11 +124,27 @@ function setupMirror(scene, mirror) {
   return { mirrorTex, updateMirrorPlane };
 }
 
-function setupDartInteractions(scene, xr) {
+function setupDartInteractions(scene, xr, options = {}) {
   const xrGripStates = new Map();
   const xrHeldDarts = new Map();
   const xrMotionSamples = new Map();
   const flyingDarts = new Set();
+  const dartFlightPositions = new Map();
+  const dartScore = {
+    activePlayer: 0,
+    turnThrows: 0,
+    throwsPerTurn: 3,
+    gameOver: false,
+    players: [
+      { name: "Player 1", remaining: 300 },
+      { name: "Player 2", remaining: 300 },
+    ],
+    hitBoard: null,
+    hitText: null,
+    gameBoard: null,
+    playerTexts: [],
+    statusText: null,
+  };
   const desktopHold = {
     root: null,
     anchor: null,
@@ -125,8 +156,20 @@ function setupDartInteractions(scene, xr) {
   const desktopChargeMaxMs = 1600;
   const desktopMinThrowSpeed = 4.5;
   const desktopMaxThrowSpeed = 13;
+  const dartGamePanelTransform = options.dartGamePanelTransform || null;
   const dartFlightRotationOffset = Quaternion.FromEulerAngles(0, Math.PI, 0);
   const desktopHeldDartRotation = Quaternion.FromEulerAngles(0.35, 0, -0.22);
+  scene.dartInteractionState = {
+    xrHeldDarts,
+    desktopHold,
+  };
+  const dartBoardScoreRings = [
+    { maxRadius: 0.12, points: 50, label: "Bullseye" },
+    { maxRadius: 0.28, points: 40, label: "Inner Red" },
+    { maxRadius: 0.52, points: 30, label: "Inner Gray" },
+    { maxRadius: 0.78, points: 20, label: "Outer Red" },
+    { maxRadius: 1.05, points: 10, label: "Outer Gray" },
+  ];
 
   function getDartRoot(mesh) {
     let current = mesh;
@@ -148,6 +191,15 @@ function setupDartInteractions(scene, xr) {
       current = current.parent;
     }
     return null;
+  }
+
+  function isSceneCollider(mesh) {
+    let current = mesh;
+    while (current) {
+      if (current.metadata?.isSceneCollider) return true;
+      current = current.parent;
+    }
+    return false;
   }
 
   function setDartPickable(root, isPickable) {
@@ -182,6 +234,11 @@ function setupDartInteractions(scene, xr) {
     }
 
     return viewRoot;
+  }
+
+  function disposeDesktopDartView() {
+    desktopHold.viewRoot?.dispose(false, false);
+    desktopHold.viewRoot = null;
   }
 
   function pickDartWithRay(ray) {
@@ -280,12 +337,284 @@ function setupDartInteractions(scene, xr) {
     return direction.scale(0.16);
   }
 
+  function getDartBoardFrame(boardRoot, pick) {
+    const bounds = boardRoot.getHierarchyBoundingVectors(true);
+    const center = bounds.min.add(bounds.max).scale(0.5);
+    let normal = boardRoot.getDirection(Axis.Z);
+
+    if (!normal || normal.lengthSquared() < 0.0001) {
+      normal = pick?.getNormal?.(true, true);
+    }
+
+    normal = normal.normalizeToNew();
+    let right = boardRoot.getDirection(Axis.X);
+    if (right.lengthSquared() < 0.0001) {
+      right = Vector3.Cross(Vector3.Up(), normal);
+    }
+    right.normalize();
+
+    const cameraPosition = scene.xrHelper?.baseExperience?.camera?.globalPosition ??
+      scene.activeCamera?.globalPosition ??
+      scene.activeCamera?.position;
+    let faceNormal = normal.clone();
+    if (cameraPosition) {
+      const toCamera = cameraPosition.subtract(center);
+      if (toCamera.lengthSquared() > 0.0001 && Vector3.Dot(faceNormal, toCamera) < 0) {
+        faceNormal.scaleInPlace(-1);
+      }
+    }
+
+    const corners = [
+      new Vector3(bounds.min.x, bounds.min.y, bounds.min.z),
+      new Vector3(bounds.min.x, bounds.min.y, bounds.max.z),
+      new Vector3(bounds.min.x, bounds.max.y, bounds.min.z),
+      new Vector3(bounds.min.x, bounds.max.y, bounds.max.z),
+      new Vector3(bounds.max.x, bounds.min.y, bounds.min.z),
+      new Vector3(bounds.max.x, bounds.min.y, bounds.max.z),
+      new Vector3(bounds.max.x, bounds.max.y, bounds.min.z),
+      new Vector3(bounds.max.x, bounds.max.y, bounds.max.z),
+    ];
+
+    let radius = 0;
+    for (const corner of corners) {
+      const offset = corner.subtract(center);
+      const planarOffset = offset.subtract(normal.scale(Vector3.Dot(offset, normal)));
+      radius = Math.max(radius, planarOffset.length());
+    }
+
+    return {
+      center,
+      normal,
+      faceNormal,
+      right,
+      radius: Math.max(radius, 0.001),
+    };
+  }
+
+  function getDartBoardScore(boardRoot, pick) {
+    if (!boardRoot || !pick?.pickedPoint) {
+      return { points: 0, label: "Miss", normalizedRadius: 1 };
+    }
+
+    const { center, normal, radius } = getDartBoardFrame(boardRoot, pick);
+    const offset = pick.pickedPoint.subtract(center);
+    const planarOffset = offset.subtract(normal.scale(Vector3.Dot(offset, normal)));
+    const normalizedRadius = planarOffset.length() / radius;
+    const ring = dartBoardScoreRings.find((section) => normalizedRadius <= section.maxRadius);
+
+    return {
+      points: ring?.points ?? 0,
+      label: ring?.label ?? "Miss",
+      normalizedRadius,
+      center,
+      normal,
+    };
+  }
+
+  function ensureDartScoreDisplay(boardRoot, pick) {
+    if (dartScore.hitBoard && dartScore.hitText && dartScore.gameBoard) return;
+
+    const frame = getDartBoardFrame(boardRoot, pick);
+    const hitBoard = MeshBuilder.CreatePlane(
+      "dartHitBoard",
+      { width: 1.35, height: 0.42 },
+      scene
+    );
+    hitBoard.billboardMode = Mesh.BILLBOARDMODE_ALL;
+    hitBoard.position.copyFrom(
+      frame.center
+        .add(Vector3.Up().scale(frame.radius * 1.08))
+        .add(frame.faceNormal.scale(0.12))
+    );
+    hitBoard.isPickable = false;
+
+    const hitTexture = GUI.AdvancedDynamicTexture.CreateForMesh(hitBoard, 768, 240, false);
+    const hitText = new GUI.TextBlock("dartHitText");
+    hitText.color = "white";
+    hitText.fontFamily = "Arial";
+    hitText.fontSize = 58;
+    hitText.textWrapping = true;
+    hitText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+    hitText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+    hitText.text = "Ready";
+    hitTexture.addControl(hitText);
+
+    const gameBoard = MeshBuilder.CreatePlane(
+      "dartGameBoard",
+      { width: 1.65, height: 1.05 },
+      scene
+    );
+    if (dartGamePanelTransform?.position) {
+      gameBoard.position.copyFrom(dartGamePanelTransform.position);
+    } else {
+      gameBoard.position.copyFrom(
+        frame.center
+          .add(frame.right.scale(-(frame.radius + 2.6)))
+          .add(frame.faceNormal.scale(0.14))
+      );
+    }
+
+    if (dartGamePanelTransform?.rotationQuaternion) {
+      gameBoard.rotationQuaternion = dartGamePanelTransform.rotationQuaternion.clone();
+    } else if (dartGamePanelTransform?.rotation) {
+      gameBoard.rotationQuaternion = null;
+      gameBoard.rotation.copyFrom(dartGamePanelTransform.rotation);
+    } else {
+      gameBoard.rotationQuaternion = Quaternion.FromLookDirectionLH(frame.faceNormal, Vector3.Up());
+    }
+
+    if (dartGamePanelTransform?.scaling) {
+      gameBoard.scaling.copyFrom(dartGamePanelTransform.scaling);
+    }
+    gameBoard.isPickable = false;
+
+    const gameTexture = GUI.AdvancedDynamicTexture.CreateForMesh(gameBoard, 1024, 640, false);
+    const panel = new GUI.Rectangle("dartGamePanel");
+    panel.width = "100%";
+    panel.height = "100%";
+    panel.thickness = 3;
+    panel.cornerRadius = 16;
+    panel.color = "#d8e6f3";
+    panel.background = "#101820E6";
+    gameTexture.addControl(panel);
+
+    const grid = new GUI.Grid("dartGameGrid");
+    grid.addColumnDefinition(0.5);
+    grid.addColumnDefinition(0.5);
+    grid.addRowDefinition(0.72);
+    grid.addRowDefinition(0.28);
+    panel.addControl(grid);
+
+    const playerTexts = dartScore.players.map((player, index) => {
+      const text = new GUI.TextBlock(`dartPlayer${index + 1}Text`);
+      text.color = "white";
+      text.fontFamily = "Arial";
+      text.fontSize = 66;
+      text.textWrapping = true;
+      text.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+      text.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+      grid.addControl(text, 0, index);
+      return text;
+    });
+
+    const divider = new GUI.Rectangle("dartGameDivider");
+    divider.width = "2px";
+    divider.height = "72%";
+    divider.color = "#d8e6f3";
+    divider.background = "#d8e6f3";
+    divider.thickness = 0;
+    divider.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+    divider.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
+    panel.addControl(divider);
+
+    const statusText = new GUI.TextBlock("dartGameStatusText");
+    statusText.height = "28%";
+    statusText.top = "36%";
+    statusText.color = "#d8e6f3";
+    statusText.fontFamily = "Arial";
+    statusText.fontSize = 44;
+    statusText.textWrapping = true;
+    statusText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+    statusText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+    panel.addControl(statusText);
+
+    dartScore.hitBoard = hitBoard;
+    dartScore.hitText = hitText;
+    dartScore.gameBoard = gameBoard;
+    dartScore.playerTexts = playerTexts;
+    dartScore.statusText = statusText;
+    updateDartGameDisplay("Player 1 throws");
+  }
+
+  function updateDartGameDisplay(status = null) {
+    if (!dartScore.playerTexts.length || !dartScore.statusText) return;
+
+    for (let index = 0; index < dartScore.players.length; index += 1) {
+      const player = dartScore.players[index];
+      const activePrefix = index === dartScore.activePlayer ? "> " : "";
+      dartScore.playerTexts[index].text = `${activePrefix}${player.name}\n${player.remaining}`;
+      dartScore.playerTexts[index].color = index === dartScore.activePlayer ? "#7dd3fc" : "white";
+    }
+
+    const player = dartScore.players[dartScore.activePlayer];
+    const throwLabel = `Dart ${dartScore.turnThrows + 1}/${dartScore.throwsPerTurn}`;
+    dartScore.statusText.text = status || `${player.name} throws\n${throwLabel}`;
+  }
+
+  function findDartBoardRoot() {
+    for (const mesh of scene.meshes) {
+      const boardRoot = getDartBoardRoot(mesh);
+      if (boardRoot) return boardRoot;
+    }
+    return null;
+  }
+
+  function initializeDartGameDisplay() {
+    const boardRoot = findDartBoardRoot();
+    if (boardRoot) {
+      ensureDartScoreDisplay(boardRoot, null);
+    }
+  }
+
+  function registerDartThrow(root) {
+    if (!root || dartScore.gameOver) return;
+
+    const throwingPlayerIndex = dartScore.activePlayer;
+    root.metadata = {
+      ...(root.metadata || {}),
+      dartThrowPlayerIndex: throwingPlayerIndex,
+    };
+
+    dartScore.turnThrows += 1;
+    let status = `${dartScore.players[throwingPlayerIndex].name} threw dart ${dartScore.turnThrows}/${dartScore.throwsPerTurn}`;
+
+    if (dartScore.turnThrows >= dartScore.throwsPerTurn) {
+      dartScore.turnThrows = 0;
+      dartScore.activePlayer = (dartScore.activePlayer + 1) % dartScore.players.length;
+      status = `${dartScore.players[dartScore.activePlayer].name} throws`;
+    }
+
+    updateDartGameDisplay(status);
+  }
+
+  function recordDartBoardScore(root, boardRoot, pick) {
+    const score = getDartBoardScore(boardRoot, pick);
+    ensureDartScoreDisplay(boardRoot, pick);
+
+    const scoringPlayerIndex = root?.metadata?.dartThrowPlayerIndex ?? dartScore.activePlayer;
+    const player = dartScore.players[scoringPlayerIndex];
+    const nextRemaining = player.remaining - score.points;
+    let status = `${player.name}: ${score.label} -${score.points}`;
+
+    if (dartScore.gameOver) {
+      status = "Game over";
+    } else if (nextRemaining < 0) {
+      status = `${player.name} busts on ${score.label}`;
+    } else {
+      player.remaining = nextRemaining;
+      if (nextRemaining === 0) {
+        status = `${player.name} wins`;
+        dartScore.gameOver = true;
+        dartScore.activePlayer = scoringPlayerIndex;
+      }
+    }
+
+    if (dartScore.hitText) {
+      dartScore.hitText.text = `${score.label}\n${score.points} points`;
+    }
+
+    updateDartGameDisplay(status);
+    console.log(`[DART] ${status}`);
+    return score;
+  }
+
   function stickDartToBoard(root, pick, velocity) {
     const boardRoot = getDartBoardRoot(pick.pickedMesh);
     if (!root || !boardRoot || !pick.pickedPoint) return false;
 
     disposeDartPhysics(root);
     flyingDarts.delete(root);
+    dartFlightPositions.delete(root);
 
     root.setParent(null);
     const velocityDirection = velocity.normalizeToNew();
@@ -305,8 +634,66 @@ function setupDartInteractions(scene, xr) {
     setDartPickable(root, false);
 
     root.setParent(null);
+    recordDartBoardScore(root, boardRoot, pick);
     console.log("[DART] Stuck to dart board");
     return true;
+  }
+
+  function stopDartAtSceneCollider(root, pick, velocity) {
+    if (!root || !pick?.pickedPoint || !velocity || velocity.lengthSquared() < 0.01) return false;
+
+    disposeDartPhysics(root);
+    flyingDarts.delete(root);
+    dartFlightPositions.delete(root);
+
+    root.setParent(null);
+    const impactDirection = velocity.normalizeToNew();
+    alignDartWithVelocity(root, impactDirection);
+    root.computeWorldMatrix(true);
+
+    const surfaceNormal = pick.getNormal?.(true, true);
+    const lift = surfaceNormal?.lengthSquared?.() > 0.0001
+      ? surfaceNormal.normalizeToNew().scale(0.025)
+      : Vector3.Zero();
+    const tipOffset = getDartTipOffset(root, impactDirection);
+
+    root.position.copyFrom(
+      pick.pickedPoint
+        .subtract(tipOffset)
+        .add(lift)
+    );
+    setDartPickable(root, true);
+    console.log("[DART] Hit scene collider");
+    return true;
+  }
+
+  function tryStopDartAtSceneCollider(root, velocity) {
+    if (!root || !velocity || velocity.lengthSquared() < 0.2) return false;
+
+    const currentPosition = root.getAbsolutePosition();
+    const previousPosition = dartFlightPositions.get(root) || currentPosition;
+    const delta = currentPosition.subtract(previousPosition);
+    const speed = velocity.length();
+    const direction = delta.lengthSquared() > 0.0001
+      ? delta.normalizeToNew()
+      : velocity.normalizeToNew();
+    const frameDistance = Math.max(
+      delta.length(),
+      speed * scene.getEngine().getDeltaTime() / 1000
+    );
+    const ray = new Ray(previousPosition, direction, frameDistance + 0.3);
+    const pick = scene.pickWithRay(ray, (mesh) => (
+      isSceneCollider(mesh) &&
+      !getDartRoot(mesh) &&
+      !getDartBoardRoot(mesh)
+    ));
+
+    if (!pick?.hit) {
+      dartFlightPositions.set(root, currentPosition.clone());
+      return false;
+    }
+
+    return stopDartAtSceneCollider(root, pick, velocity);
   }
 
   function tryStickDartToBoard(root, velocity) {
@@ -328,6 +715,7 @@ function setupDartInteractions(scene, xr) {
     if (!root || !holder) return false;
 
     disposeDartPhysics(root);
+    dartFlightPositions.delete(root);
     setDartPickable(root, false);
     root.setParent(holder);
     root.position.set(0.035, -0.025, 0.09);
@@ -340,6 +728,7 @@ function setupDartInteractions(scene, xr) {
     if (!root || !cam) return false;
 
     disposeDartPhysics(root);
+    dartFlightPositions.delete(root);
     setDartPickable(root, false);
     setDartVisible(root, true);
 
@@ -349,7 +738,7 @@ function setupDartInteractions(scene, xr) {
     anchor.position.set(0.22, -0.18, 0.55);
     anchor.rotationQuaternion = Quaternion.Identity();
 
-    desktopHold.viewRoot?.dispose(false, true);
+    disposeDesktopDartView();
     const viewRoot = cloneDartForDesktopView(root);
     viewRoot.setParent(anchor);
     viewRoot.position.set(0, 0, 0);
@@ -379,19 +768,20 @@ function setupDartInteractions(scene, xr) {
     root.position.copyFrom(worldPos);
     alignDartWithVelocity(root, velocity);
     setDartPickable(root, true);
+    registerDartThrow(root);
 
     const impostor = ensureDartPhysics(root);
     impostor.setLinearVelocity(velocity);
     impostor.setAngularVelocity(Vector3.Zero());
     flyingDarts.add(root);
+    dartFlightPositions.set(root, worldPos.clone());
   }
 
   function releaseDesktopDart(root, velocity) {
     const cam = scene.activeCamera;
     if (!root || !cam) return;
 
-    desktopHold.viewRoot?.dispose(false, true);
-    desktopHold.viewRoot = null;
+    disposeDesktopDartView();
 
     const spawnPos = cam.globalPosition
       .add(cam.getDirection(Axis.Z).normalize().scale(0.7))
@@ -455,6 +845,8 @@ function setupDartInteractions(scene, xr) {
     return Math.min((performance.now() - desktopHold.chargeStartedAt) / desktopChargeMaxMs, 1);
   }
 
+  initializeDartGameDisplay();
+
   scene.onPointerObservable.add((pointerInfo) => {
     if (isInXR(scene)) return;
 
@@ -508,10 +900,15 @@ function setupDartInteractions(scene, xr) {
       if (!velocity || velocity.lengthSquared() < 0.2) {
         dart.physicsImpostor?.setAngularVelocity(Vector3.Zero());
         flyingDarts.delete(dart);
+        dartFlightPositions.delete(dart);
         continue;
       }
 
       if (tryStickDartToBoard(dart, velocity)) {
+        continue;
+      }
+
+      if (tryStopDartAtSceneCollider(dart, velocity)) {
         continue;
       }
 
@@ -531,8 +928,7 @@ function setupDartInteractions(scene, xr) {
     }
 
     if (desktopHold.root) {
-      desktopHold.viewRoot?.dispose(false, true);
-      desktopHold.viewRoot = null;
+      disposeDesktopDartView();
       setDartVisible(desktopHold.root, true);
       setDartPickable(desktopHold.root, true);
       desktopHold.root = null;
@@ -563,6 +959,316 @@ function setupDartInteractions(scene, xr) {
       }
 
       xrGripStates.set(controllerId, isPressed);
+    }
+  });
+}
+
+function setupObjectInteractions(scene, xr) {
+  const desktopHold = {
+    root: null,
+    anchor: null,
+  };
+  const xrGripStates = new Map();
+  const xrTriggerStates = new Map();
+  const xrHeldObjects = new Map();
+
+  scene.objectInteractionState = {
+    desktopHold,
+    xrHeldObjects,
+  };
+
+  function getSceneInteractableRoot(mesh) {
+    let current = mesh;
+    while (current) {
+      if (current.metadata?.suppressSceneInteraction) {
+        return null;
+      }
+      if (current.metadata?.isSceneInteractable) {
+        return current.metadata.interactableRoot || current;
+      }
+      current = current.parent;
+    }
+    return null;
+  }
+
+  function isPickupRoot(mesh) {
+    const root = getSceneInteractableRoot(mesh);
+    return !!root?.metadata?.pickupEnabled;
+  }
+
+  function isActivatableRoot(mesh) {
+    const root = getSceneInteractableRoot(mesh);
+    return !!root?.metadata?.activateOnSelect;
+  }
+
+  function setInteractablePickable(root, isPickable) {
+    root.isPickable = isPickable;
+    for (const child of root.getChildMeshes(false)) {
+      child.isPickable = isPickable;
+    }
+  }
+
+  function getControllerRay(controller) {
+    const pointer = controller.pointer || controller.grip;
+    if (!pointer) return null;
+
+    const origin = pointer.getAbsolutePosition();
+    const direction = pointer.getDirection(Axis.Z);
+    if (direction.lengthSquared() < 0.0001) return null;
+
+    direction.normalize();
+    return new Ray(origin, direction, 6);
+  }
+
+  function isGripPressed(controller) {
+    const components = controller.motionController?.components || {};
+    for (const [id, component] of Object.entries(components)) {
+      const normalizedId = id.toLowerCase();
+      if (
+        normalizedId.includes("squeeze") ||
+        normalizedId.includes("grip") ||
+        normalizedId === "xr-standard-squeeze"
+      ) {
+        return !!component.pressed;
+      }
+    }
+
+    const squeezeButton = controller.inputSource?.gamepad?.buttons?.[1];
+    return !!squeezeButton?.pressed;
+  }
+
+  function isTriggerPressed(controller) {
+    const components = controller.motionController?.components || {};
+    for (const [id, component] of Object.entries(components)) {
+      const normalizedId = id.toLowerCase();
+      if (
+        normalizedId.includes("trigger") ||
+        normalizedId === "xr-standard-trigger"
+      ) {
+        return !!component.pressed;
+      }
+    }
+
+    const triggerButton = controller.inputSource?.gamepad?.buttons?.[0];
+    return !!triggerButton?.pressed;
+  }
+
+  function pickDesktopSceneInteractable() {
+    const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => !!getSceneInteractableRoot(mesh));
+    return pick?.hit ? getSceneInteractableRoot(pick.pickedMesh) : null;
+  }
+
+  function pickDesktopInteractable() {
+    const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => isPickupRoot(mesh));
+    return pick?.hit ? getSceneInteractableRoot(pick.pickedMesh) : null;
+  }
+
+  function pickSceneInteractableWithRay(ray) {
+    const pick = scene.pickWithRay(ray, (mesh) => !!getSceneInteractableRoot(mesh));
+    return pick?.hit ? getSceneInteractableRoot(pick.pickedMesh) : null;
+  }
+
+  function pickInteractableWithRay(ray) {
+    const pick = scene.pickWithRay(ray, (mesh) => isPickupRoot(mesh));
+    return pick?.hit ? getSceneInteractableRoot(pick.pickedMesh) : null;
+  }
+
+  function captureWorldTransform(root) {
+    const matrix = root.computeWorldMatrix(true);
+    const scaling = new Vector3();
+    const rotation = new Quaternion();
+    const position = new Vector3();
+    matrix.decompose(scaling, rotation, position);
+    return { scaling, rotation, position };
+  }
+
+  function getGrabPointLocalTransform(root, mode = "xr") {
+    const grabPoint = mode === "desktop"
+      ? root.metadata?.desktopGrabPointNode
+      : root.metadata?.xrGrabPointNode;
+    if (!grabPoint) {
+      return {
+        position: Vector3.Zero(),
+        rotation: Quaternion.Identity(),
+      };
+    }
+
+    const rotation = grabPoint.rotationQuaternion?.clone() || Quaternion.FromEulerAngles(
+      grabPoint.rotation.x || 0,
+      grabPoint.rotation.y || 0,
+      grabPoint.rotation.z || 0
+    );
+
+    return {
+      position: grabPoint.position.clone(),
+      rotation,
+    };
+  }
+
+  function releaseHeldObject(root) {
+    if (!root) return;
+
+    const worldTransform = captureWorldTransform(root);
+    root.setParent(null);
+    root.position.copyFrom(worldTransform.position);
+    root.scaling.copyFrom(worldTransform.scaling);
+    root.rotationQuaternion = worldTransform.rotation.clone();
+    setInteractablePickable(root, true);
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: false,
+      heldBy: null,
+    };
+  }
+
+  function applyHeldTransformFromGrabPoint(root, mode = "xr") {
+    const grabPoint = getGrabPointLocalTransform(root, mode);
+    const inverseRotation = grabPoint.rotation.clone().normalize();
+    inverseRotation.conjugateInPlace();
+    const inverseRotationMatrix = Matrix.Identity();
+    inverseRotation.toRotationMatrix(inverseRotationMatrix);
+    const scaledGrabOffset = new Vector3(
+      grabPoint.position.x * root.scaling.x,
+      grabPoint.position.y * root.scaling.y,
+      grabPoint.position.z * root.scaling.z
+    );
+    const inversePosition = Vector3.TransformCoordinates(
+      scaledGrabOffset.scale(-1),
+      inverseRotationMatrix
+    );
+    root.position.copyFrom(inversePosition);
+    root.rotationQuaternion = inverseRotation;
+  }
+
+  function holdObject(root, holder, heldBy, mode = "xr") {
+    if (!root || !holder || root.metadata?.isHeld || !root.metadata?.pickupEnabled) return false;
+
+    setInteractablePickable(root, false);
+    root.parent = holder;
+    const baseLocalScaling = root.metadata?.baseLocalScaling;
+    if (baseLocalScaling) {
+      root.scaling.copyFrom(baseLocalScaling);
+    }
+    applyHeldTransformFromGrabPoint(root, mode);
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: true,
+      heldBy,
+    };
+    return true;
+  }
+
+  function holdObjectOnDesktop(root) {
+    const cam = scene.activeCamera;
+    if (!root || !cam) return false;
+
+    const anchor = desktopHold.anchor || new TransformNode("desktopHeldObjectAnchor", scene);
+    desktopHold.anchor = anchor;
+    anchor.parent = cam;
+    anchor.position.set(0.34, -0.30, 1.05);
+    anchor.rotationQuaternion = Quaternion.Identity();
+
+    if (!holdObject(root, anchor, "desktop", "desktop")) return false;
+
+    desktopHold.root = root;
+    return true;
+  }
+
+  function holdObjectOnController(root, controller) {
+    const holder = controller.grip || controller.pointer;
+    if (!holder) return false;
+    return holdObject(root, holder, controller.uniqueId || controller.inputSource?.handedness || "xr", "xr");
+  }
+
+  function releaseDesktopObject() {
+    if (!desktopHold.root) return;
+    releaseHeldObject(desktopHold.root);
+    desktopHold.root = null;
+  }
+
+  scene.onPointerObservable.add((pointerInfo) => {
+    if (isInXR(scene)) return;
+
+    const button = pointerInfo.event?.button;
+    if (pointerInfo.type !== PointerEventTypes.POINTERDOWN || (button != null && button !== 0)) {
+      return;
+    }
+
+    if (scene.dartInteractionState?.desktopHold?.root) return;
+
+    if (desktopHold.root) {
+      releaseDesktopObject();
+      return;
+    }
+
+    const root = pickDesktopSceneInteractable();
+    if (!root) return;
+
+    if (root.metadata?.activateOnSelect && !root.metadata?.pickupEnabled) {
+      root.metadata.onActivate?.(root, { mode: "desktop" });
+      return;
+    }
+
+    if (root.metadata?.pickupEnabled) {
+      holdObjectOnDesktop(root);
+    }
+  });
+
+  scene.onBeforeRenderObservable.add(() => {
+    if (desktopHold.root && isInXR(scene)) {
+      releaseDesktopObject();
+    }
+  });
+
+  if (!xr) return;
+
+  xr.baseExperience.sessionManager.onXRFrameObservable.add(() => {
+    if (!isInXR(scene)) {
+      for (const root of xrHeldObjects.values()) {
+        releaseHeldObject(root);
+      }
+      xrGripStates.clear();
+      xrTriggerStates.clear();
+      xrHeldObjects.clear();
+      return;
+    }
+
+    for (const controller of xr.input.controllers) {
+      const controllerId = controller.uniqueId || controller.inputSource?.handedness || "unknown";
+      const isPressed = isGripPressed(controller);
+      const wasPressed = xrGripStates.get(controllerId) ?? false;
+      const isTriggerDown = isTriggerPressed(controller);
+      const wasTriggerDown = xrTriggerStates.get(controllerId) ?? false;
+
+      if (scene.dartInteractionState?.xrHeldDarts?.has(controllerId)) {
+        xrGripStates.set(controllerId, isPressed);
+        xrTriggerStates.set(controllerId, isTriggerDown);
+        continue;
+      }
+
+      if (isPressed && !wasPressed && !xrHeldObjects.has(controllerId)) {
+        const ray = getControllerRay(controller);
+        const root = ray ? pickInteractableWithRay(ray) : null;
+        if (root && holdObjectOnController(root, controller)) {
+          xrHeldObjects.set(controllerId, root);
+        }
+      }
+
+      if (!isPressed && wasPressed && xrHeldObjects.has(controllerId)) {
+        releaseHeldObject(xrHeldObjects.get(controllerId));
+        xrHeldObjects.delete(controllerId);
+      }
+
+      if (isTriggerDown && !wasTriggerDown && !xrHeldObjects.has(controllerId)) {
+        const ray = getControllerRay(controller);
+        const root = ray ? pickSceneInteractableWithRay(ray) : null;
+        if (root?.metadata?.activateOnSelect && !root.metadata?.pickupEnabled) {
+          root.metadata.onActivate?.(root, { mode: "xr", controller });
+        }
+      }
+
+      xrGripStates.set(controllerId, isPressed);
+      xrTriggerStates.set(controllerId, isTriggerDown);
     }
   });
 }
@@ -641,6 +1347,30 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   settingsPanel.addRowDefinition(1);
   menuCard.addControl(settingsPanel);
 
+  const desktopControlsPanel = new GUI.Grid("desktopControlsGrid");
+  desktopControlsPanel.width = "97%";
+  desktopControlsPanel.height = "86%";
+  desktopControlsPanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  desktopControlsPanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  desktopControlsPanel.isVisible = false;
+  for (let i = 0; i < 6; i += 1) {
+    desktopControlsPanel.addColumnDefinition(1 / 6);
+  }
+  desktopControlsPanel.addRowDefinition(1);
+  menuCard.addControl(desktopControlsPanel);
+
+  const vrControlsPanel = new GUI.Grid("vrControlsGrid");
+  vrControlsPanel.width = "97%";
+  vrControlsPanel.height = "86%";
+  vrControlsPanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  vrControlsPanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  vrControlsPanel.isVisible = false;
+  for (let i = 0; i < 6; i += 1) {
+    vrControlsPanel.addColumnDefinition(1 / 6);
+  }
+  vrControlsPanel.addRowDefinition(1);
+  menuCard.addControl(vrControlsPanel);
+
   const volumePanel = new GUI.Grid("volumeMenuGrid");
   volumePanel.width = "97%";
   volumePanel.height = "86%";
@@ -653,12 +1383,56 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   volumePanel.addRowDefinition(1);
   menuCard.addControl(volumePanel);
 
+  const listBoard = MeshBuilder.CreatePlane(
+    "menuListBoard",
+    { width: 1.98, height: 0.92, sideOrientation: Mesh.DOUBLESIDE },
+    scene
+  );
+  listBoard.parent = menuHost;
+  listBoard.position.set(0, 0.66, 0.02);
+  listBoard.isPickable = true;
+  listBoard.setEnabled(false);
+
+  const listTexture = GUI.AdvancedDynamicTexture.CreateForMesh(
+    listBoard,
+    3328,
+    1536,
+    false
+  );
+
+  const listCard = new GUI.Rectangle("menuListCard");
+  listCard.width = "99.2%";
+  listCard.height = "94%";
+  listCard.thickness = 3;
+  listCard.cornerRadius = 28;
+  listCard.color = "#bfd0df";
+  listCard.background = "#0d1a29F2";
+  listTexture.addControl(listCard);
+
+  const mutePanel = new GUI.Grid("muteMenuGrid");
+  mutePanel.width = "97%";
+  mutePanel.height = "88%";
+  mutePanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  mutePanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  mutePanel.isVisible = false;
+  for (let i = 0; i < 4; i += 1) {
+    mutePanel.addColumnDefinition(1 / 4);
+  }
+  mutePanel.addRowDefinition(0.5);
+  mutePanel.addRowDefinition(0.5);
+  listCard.addControl(mutePanel);
+
   let menuButtonIndex = 0;
   let settingsButtonIndex = 0;
+  let desktopButtonIndex = 0;
+  let vrButtonIndex = 0;
   let volumeButtonIndex = 0;
+  let muteButtonIndex = 0;
   let pendingLeaveAction = null;
+  const menuButtonFontSize = 76;
+  const listButtonFontSize = 76;
 
-  function styleMenuButton(button, fontSize = 72, background = "#4e6f8d") {
+  function styleMenuButton(button, fontSize = menuButtonFontSize, background = "#4e6f8d") {
     button.width = "95%";
     button.height = "96%";
     button.thickness = 2;
@@ -688,42 +1462,116 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     return button;
   }
 
-  function addSettingsButton(text, callback) {
+  function addSettingsButton(text, callback, row = null, column = null, fontSize = menuButtonFontSize, background = "#4e6f8d") {
     const button = GUI.Button.CreateSimpleButton(controlName(text, "settings_btn"), text);
-    styleMenuButton(button);
+    styleMenuButton(button, fontSize, background);
     button.onPointerUpObservable.add(callback);
-    settingsPanel.addControl(button, 0, settingsButtonIndex);
-    settingsButtonIndex += 1;
+    const targetIndex = row == null || column == null ? settingsButtonIndex : row * 6 + column;
+    settingsPanel.addControl(button, Math.floor(targetIndex / 6), targetIndex % 6);
+    settingsButtonIndex = Math.max(settingsButtonIndex, targetIndex + 1);
     return button;
   }
 
-  function addVolumeButton(text, callback) {
-    const button = GUI.Button.CreateSimpleButton(controlName(text, "volume_btn"), text);
-    styleMenuButton(button);
+  function addDesktopButton(text, callback, row = null, column = null, fontSize = menuButtonFontSize, background = "#4e6f8d") {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "desktop_btn"), text);
+    styleMenuButton(button, fontSize, background);
     button.onPointerUpObservable.add(callback);
-    volumePanel.addControl(button, 0, volumeButtonIndex);
-    volumeButtonIndex += 1;
+    const targetIndex = row == null || column == null ? desktopButtonIndex : row * 6 + column;
+    desktopControlsPanel.addControl(button, Math.floor(targetIndex / 6), targetIndex % 6);
+    desktopButtonIndex = Math.max(desktopButtonIndex, targetIndex + 1);
+    return button;
+  }
+
+  function addVRButton(text, callback, row = null, column = null, fontSize = menuButtonFontSize, background = "#4e6f8d") {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "vr_btn"), text);
+    styleMenuButton(button, fontSize, background);
+    button.onPointerUpObservable.add(callback);
+    const targetIndex = row == null || column == null ? vrButtonIndex : row * 6 + column;
+    vrControlsPanel.addControl(button, Math.floor(targetIndex / 6), targetIndex % 6);
+    vrButtonIndex = Math.max(vrButtonIndex, targetIndex + 1);
+    return button;
+  }
+
+  function addVolumeButton(text, callback, row = null, column = null, fontSize = menuButtonFontSize, background = "#4e6f8d") {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "volume_btn"), text);
+    styleMenuButton(button, fontSize, background);
+    button.onPointerUpObservable.add(callback);
+    const targetIndex = row == null || column == null ? volumeButtonIndex : row * 6 + column;
+    volumePanel.addControl(button, Math.floor(targetIndex / 6), targetIndex % 6);
+    volumeButtonIndex = Math.max(volumeButtonIndex, targetIndex + 1);
+    return button;
+  }
+
+  function addMuteButton(text, callback, row = null, column = null, fontSize = listButtonFontSize, background = "#4e6f8d") {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "mute_btn"), text);
+    styleMenuButton(button, fontSize, background);
+    button.width = "76%";
+    button.height = "62%";
+    button.onPointerUpObservable.add(callback);
+    const targetIndex = row == null || column == null ? muteButtonIndex : row * 4 + column;
+    mutePanel.addControl(button, Math.floor(targetIndex / 4), targetIndex % 4);
+    muteButtonIndex = Math.max(muteButtonIndex, targetIndex + 1);
     return button;
   }
 
   function showMainPanel() {
     menuPanel.isVisible = true;
     settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
   function showSettingsPanel() {
     menuPanel.isVisible = false;
     settingsPanel.isVisible = true;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
+    leaveConfirmPanel.isVisible = false;
+  }
+
+  function showDesktopControlsPanel() {
+    menuPanel.isVisible = false;
+    settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = true;
+    vrControlsPanel.isVisible = false;
+    volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
+    leaveConfirmPanel.isVisible = false;
+  }
+
+  function showVRControlsPanel() {
+    menuPanel.isVisible = false;
+    settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = true;
+    volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
   function showVolumePanel() {
     menuPanel.isVisible = false;
     settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = false;
     volumePanel.isVisible = true;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
+    leaveConfirmPanel.isVisible = false;
+  }
+
+  function showMutePanel() {
+    listBoard.setEnabled(true);
+    mutePanel.isVisible = true;
     leaveConfirmPanel.isVisible = false;
   }
 
@@ -762,12 +1610,16 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     pendingLeaveAction = action;
     menuPanel.isVisible = false;
     settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    listBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = true;
   }
 
   const leaveYesButton = GUI.Button.CreateSimpleButton("leaveYes_btn", "Yes");
-  styleMenuButton(leaveYesButton, 82, "#2f7d5f");
+  styleMenuButton(leaveYesButton, menuButtonFontSize, "#2f7d5f");
   leaveYesButton.width = "92%";
   leaveYesButton.height = "92%";
   leaveYesButton.onPointerUpObservable.add(() => {
@@ -778,7 +1630,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   leaveConfirmPanel.addControl(leaveYesButton, 1, 0);
 
   const leaveNoButton = GUI.Button.CreateSimpleButton("leaveNo_btn", "No");
-  styleMenuButton(leaveNoButton, 82, "#7c3f48");
+  styleMenuButton(leaveNoButton, menuButtonFontSize, "#7c3f48");
   leaveNoButton.width = "92%";
   leaveNoButton.height = "92%";
   leaveNoButton.onPointerUpObservable.add(showMainMenuPanel);
@@ -852,12 +1704,57 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     return "Open Mic";
   }
 
+  function speedLabel(value) {
+    return value.toFixed(1);
+  }
+
+  function sensitivityLabel(value) {
+    return `${Math.round(value * 100)}%`;
+  }
+
+  function clampSetting(value, min, max) {
+    return Math.min(max, Math.max(min, value));
+  }
+
+  function applyDesktopLookSensitivity() {
+    const mouseInput = scene.desktopMouseInput;
+    if (!mouseInput) return;
+
+    const sensibility = 2000 / Math.max(settings.desktopLookSensitivity, 0.1);
+    mouseInput.angularSensibilityX = sensibility;
+    mouseInput.angularSensibilityY = sensibility;
+  }
+
+  let locomotionButton = null;
+  let turnModeButton = null;
+  let desktopSpeedDownButton = null;
+  let desktopSpeedUpButton = null;
+  let desktopLookDownButton = null;
+  let desktopLookUpButton = null;
+  let xrSpeedDownButton = null;
+  let xrSpeedUpButton = null;
+  let xrTurnSpeedDownButton = null;
+  let xrTurnSpeedUpButton = null;
+  let micModeButton = null;
+
   function updateSettingsLabels() {
-    locomotionButton.textBlock.text =
-      scene.navigation.xrMode === "teleport" ? "Locomotion: Teleport" : "Locomotion: Smooth";
-    turnModeButton.textBlock.text =
-      scene.navigation.xrTurnMode === "smooth" ? "Turning: Smooth" : "Turning: Snap";
-    micModeButton.textBlock.text = getMicModeLabel();
+    if (locomotionButton) {
+      locomotionButton.textBlock.text =
+        scene.navigation.xrMode === "teleport" ? "Locomotion\nTeleport" : "Locomotion\nSmooth";
+    }
+    if (turnModeButton) {
+      turnModeButton.textBlock.text =
+        scene.navigation.xrTurnMode === "smooth" ? "Turning\nSmooth" : "Turning\nSnap";
+    }
+    if (desktopSpeedDownButton) desktopSpeedDownButton.textBlock.text = `Desktop Move\n${speedLabel(settings.desktopMoveSpeed)} -`;
+    if (desktopSpeedUpButton) desktopSpeedUpButton.textBlock.text = `Desktop Move\n${speedLabel(settings.desktopMoveSpeed)} +`;
+    if (desktopLookDownButton) desktopLookDownButton.textBlock.text = `Desktop Look\n${sensitivityLabel(settings.desktopLookSensitivity)} -`;
+    if (desktopLookUpButton) desktopLookUpButton.textBlock.text = `Desktop Look\n${sensitivityLabel(settings.desktopLookSensitivity)} +`;
+    if (xrSpeedDownButton) xrSpeedDownButton.textBlock.text = `VR Move\n${speedLabel(settings.xrMoveSpeed)} -`;
+    if (xrSpeedUpButton) xrSpeedUpButton.textBlock.text = `VR Move\n${speedLabel(settings.xrMoveSpeed)} +`;
+    if (xrTurnSpeedDownButton) xrTurnSpeedDownButton.textBlock.text = `VR Turn\n${speedLabel(settings.xrSmoothTurnSpeed)} -`;
+    if (xrTurnSpeedUpButton) xrTurnSpeedUpButton.textBlock.text = `VR Turn\n${speedLabel(settings.xrSmoothTurnSpeed)} +`;
+    if (micModeButton) micModeButton.textBlock.text = getMicModeLabel();
   }
 
   function getVolumeLabels() {
@@ -875,6 +1772,53 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     playerVolumeUpButton.textBlock.text = `${labels.players}\n+`;
   }
 
+  function rebuildMutePanel() {
+    mutePanel.clearControls();
+    muteButtonIndex = 0;
+    const players = scene.audioControls?.listRemotePlayers?.() || [];
+
+    if (!players.length) {
+      const emptyButton = addMuteButton("No Players\nBack", () => {
+        updateVolumeLabels();
+        showVolumePanel();
+      }, 0, 0, listButtonFontSize, "#5b6b7c");
+      emptyButton.width = "98%";
+    } else {
+      players.slice(0, 7).forEach((player) => {
+        const text = `${player.muted ? "Unmute" : "Mute"}\n${player.name}`;
+        addMuteButton(text, () => {
+          scene.audioControls?.toggleRemoteMute?.(player.id);
+          rebuildMutePanel();
+        });
+      });
+    }
+
+    addMuteButton("Back", () => {
+      updateVolumeLabels();
+      showVolumePanel();
+    }, 1, 3, listButtonFontSize, "#5b6b7c");
+  }
+
+  function rebuildPlayerListPanel() {
+    mutePanel.clearControls();
+    muteButtonIndex = 0;
+    const players = scene.audioControls?.listRemotePlayers?.() || [];
+
+    if (!players.length) {
+      addMuteButton("No Players\nBack", showMainMenuPanel, 0, 0, listButtonFontSize, "#5b6b7c");
+    } else {
+      players.slice(0, 7).forEach((player) => {
+        const text = `${player.muted ? "Unmute" : "Mute"}\n${player.name}`;
+        addMuteButton(text, () => {
+          scene.audioControls?.toggleRemoteMute?.(player.id);
+          rebuildPlayerListPanel();
+        }, null, null, listButtonFontSize, player.muted ? "#7c3f48" : "#4e6f8d");
+      });
+    }
+
+    addMuteButton("Back", showMainMenuPanel, 1, 3, listButtonFontSize, "#5b6b7c");
+  }
+
   addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
   addMenuButton("Emotes", () => console.log("Open emotes clicked"));
   addMenuButton("Settings", () => {
@@ -886,72 +1830,130 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
       navigateAfterXRExit("/choose-scene.html");
     });
   });
-  addMenuButton("Exit Website", () => {
-    showLeaveConfirm(() => {
-      navigateAfterXRExit("https://google.com");
-    });
+  addMenuButton("Players", () => {
+    rebuildPlayerListPanel();
+    showMutePanel();
   });
   addMenuButton("Close The Menu", hideMenu);
 
-  const locomotionButton = addSettingsButton("Locomotion: Smooth", () => {
+  locomotionButton = addSettingsButton("Locomotion\nSmooth", () => {
     const nextMode = scene.navigation.toggleXRMode();
     applyXRMovementMode();
     console.log(`[SETTINGS] XR locomotion set to ${nextMode}`);
     updateSettingsLabels();
-  });
+  }, 0, 0);
 
-  const turnModeButton = addSettingsButton("Turning: Snap", () => {
+  turnModeButton = addSettingsButton("Turning\nSnap", () => {
     const nextMode = scene.navigation.toggleXRTurnMode();
     console.log(`[SETTINGS] XR turning set to ${nextMode}`);
     updateSettingsLabels();
-  });
+  }, 0, 1);
 
-  addSettingsButton("Volume Settings", () => {
+  addSettingsButton("Desktop\nControls", () => {
+    updateSettingsLabels();
+    showDesktopControlsPanel();
+  }, 0, 2);
+
+  addSettingsButton("VR\nControls", () => {
+    updateSettingsLabels();
+    showVRControlsPanel();
+  }, 0, 3);
+
+  addSettingsButton("Audio", () => {
     updateVolumeLabels();
     showVolumePanel();
-  });
+  }, 0, 4);
 
-  const micModeButton = addSettingsButton("Open Mic", () => {
-    scene.voiceControls?.cycleMicMode?.();
+  addSettingsButton("Back", showMainMenuPanel, 0, 5, menuButtonFontSize, "#5b6b7c");
+
+  desktopSpeedDownButton = addDesktopButton("Move Speed\n-", () => {
+    settings.desktopMoveSpeed = clampSetting(settings.desktopMoveSpeed - 0.2, 0.8, 8);
     updateSettingsLabels();
-  });
+  }, 0, 0);
 
-  addSettingsButton("Settings", () => {
-    console.log("[SETTINGS] More settings coming soon");
-  });
+  desktopSpeedUpButton = addDesktopButton("Move Speed\n+", () => {
+    settings.desktopMoveSpeed = clampSetting(settings.desktopMoveSpeed + 0.2, 0.8, 8);
+    updateSettingsLabels();
+  }, 0, 1);
 
-  addSettingsButton("Back", () => {
-    showMainMenuPanel();
-  });
+  desktopLookDownButton = addDesktopButton("Look Sens\n-", () => {
+    settings.desktopLookSensitivity = clampSetting(settings.desktopLookSensitivity - 0.1, 0.2, 3);
+    applyDesktopLookSensitivity();
+    updateSettingsLabels();
+  }, 0, 2);
+
+  desktopLookUpButton = addDesktopButton("Look Sens\n+", () => {
+    settings.desktopLookSensitivity = clampSetting(settings.desktopLookSensitivity + 0.1, 0.2, 3);
+    applyDesktopLookSensitivity();
+    updateSettingsLabels();
+  }, 0, 3);
+
+  addDesktopButton("Settings", () => {
+    updateSettingsLabels();
+    showSettingsPanel();
+  }, 0, 4, menuButtonFontSize, "#5b6b7c");
+
+  addDesktopButton("Back", showMainMenuPanel, 0, 5, menuButtonFontSize, "#5b6b7c");
+
+  xrSpeedDownButton = addVRButton("Move Speed\n-", () => {
+    settings.xrMoveSpeed = clampSetting(settings.xrMoveSpeed - 0.2, 0.4, 6);
+    updateSettingsLabels();
+  }, 0, 0);
+
+  xrSpeedUpButton = addVRButton("Move Speed\n+", () => {
+    settings.xrMoveSpeed = clampSetting(settings.xrMoveSpeed + 0.2, 0.4, 6);
+    updateSettingsLabels();
+  }, 0, 1);
+
+  xrTurnSpeedDownButton = addVRButton("Turn Speed\n-", () => {
+    settings.xrSmoothTurnSpeed = clampSetting(settings.xrSmoothTurnSpeed - 0.2, 0.4, 5);
+    updateSettingsLabels();
+  }, 0, 2);
+
+  xrTurnSpeedUpButton = addVRButton("Turn Speed\n+", () => {
+    settings.xrSmoothTurnSpeed = clampSetting(settings.xrSmoothTurnSpeed + 0.2, 0.4, 5);
+    updateSettingsLabels();
+  }, 0, 3);
+
+  addVRButton("Settings", () => {
+    updateSettingsLabels();
+    showSettingsPanel();
+  }, 0, 4, menuButtonFontSize, "#5b6b7c");
+
+  addVRButton("Back", showMainMenuPanel, 0, 5, menuButtonFontSize, "#5b6b7c");
 
   const sceneVolumeDownButton = addVolumeButton("Scene Vol\n-", () => {
     scene.audioControls?.adjustSceneVolume?.(-0.1);
     updateVolumeLabels();
-  });
+  }, 0, 0);
 
   const sceneVolumeUpButton = addVolumeButton("Scene Vol\n+", () => {
     scene.audioControls?.adjustSceneVolume?.(0.1);
     updateVolumeLabels();
-  });
+  }, 0, 1);
 
   const playerVolumeDownButton = addVolumeButton("Player Vol\n-", () => {
     scene.audioControls?.adjustPlayerVolume?.(-0.1);
     updateVolumeLabels();
-  });
+  }, 0, 2);
 
   const playerVolumeUpButton = addVolumeButton("Player Vol\n+", () => {
     scene.audioControls?.adjustPlayerVolume?.(0.1);
     updateVolumeLabels();
-  });
+  }, 0, 3);
 
-  addVolumeButton("Volume", () => {
-    console.log("[SETTINGS] Volume controls adjust in 10% steps");
-  });
+  micModeButton = addVolumeButton("Open Mic", () => {
+    scene.voiceControls?.cycleMicMode?.();
+    updateSettingsLabels();
+  }, 0, 4);
 
   addVolumeButton("Back", () => {
     updateSettingsLabels();
     showSettingsPanel();
-  });
+  }, 0, 5, menuButtonFontSize, "#5b6b7c");
+
+  applyDesktopLookSensitivity();
+  updateSettingsLabels();
 
   function getMenuCamera() {
     return isInXR(scene)
@@ -1040,6 +2042,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   );
 
   const xrMenuButtonStates = new Map();
+  const xrPushToTalkButtonStates = new Map();
 
   function isMenuFaceButtonPressed(controller) {
     const motionController = controller.motionController;
@@ -1054,6 +2057,25 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
 
     const primaryFaceButton = controller.inputSource?.gamepad?.buttons?.[4];
     return !!primaryFaceButton?.pressed;
+  }
+
+  function isPushToTalkFaceButtonPressed(controller) {
+    const motionController = controller.motionController;
+    if (motionController?.components) {
+      for (const [id, component] of Object.entries(motionController.components)) {
+        const normalizedId = id.toLowerCase();
+        if (PUSH_TO_TALK_FACE_BUTTON_IDS.has(normalizedId)) {
+          return component.pressed;
+        }
+      }
+    }
+
+    const secondaryFaceButton = controller.inputSource?.gamepad?.buttons?.[5];
+    return !!secondaryFaceButton?.pressed;
+  }
+
+  function setPushToTalkPressed(pressed) {
+    scene.voiceControls?.setPushToTalkPressed?.(pressed);
   }
 
   function updateXRMenuActivator() {
@@ -1106,6 +2128,8 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
 
       if (!isInXR(scene)) {
         xrMenuButtonStates.clear();
+        xrPushToTalkButtonStates.clear();
+        setPushToTalkPressed(false);
         return;
       }
 
@@ -1124,7 +2148,16 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
         }
 
         xrMenuButtonStates.set(controllerId, isPressed);
+
+        xrPushToTalkButtonStates.set(
+          controllerId,
+          isPushToTalkFaceButtonPressed(controller)
+        );
       }
+
+      setPushToTalkPressed(
+        [...xrPushToTalkButtonStates.values()].some(Boolean)
+      );
     });
   }
 
@@ -1255,7 +2288,8 @@ export async function setupSharedWebXR(scene, options) {
 
   const mirrorSetup = setupMirror(scene, mirror);
   const menu = setupMenu(scene, xr, applyXRMovementMode, settings);
-  setupDartInteractions(scene, xr);
+  setupDartInteractions(scene, xr, options);
+  setupObjectInteractions(scene, xr);
   let lastSnapTurnAt = 0;
 
   function rotateXRView(angle) {
@@ -1397,6 +2431,11 @@ export async function setupSharedWebXR(scene, options) {
   window.addEventListener("keydown", (e) => {
     const key = e.key.toLowerCase();
 
+    if (key === PUSH_TO_TALK_KEY && !isInXR(scene) && !isTypingTarget(e.target)) {
+      scene.voiceControls?.setPushToTalkPressed?.(true);
+      e.preventDefault();
+    }
+
     if (MOVE_KEYS.includes(key)) {
       desktopKeys.add(key);
       e.preventDefault();
@@ -1414,6 +2453,11 @@ export async function setupSharedWebXR(scene, options) {
 
   window.addEventListener("keyup", (e) => {
     const key = e.key.toLowerCase();
+    if (key === PUSH_TO_TALK_KEY && !isInXR(scene)) {
+      scene.voiceControls?.setPushToTalkPressed?.(false);
+      e.preventDefault();
+    }
+
     if (MOVE_KEYS.includes(key)) {
       desktopKeys.delete(key);
       e.preventDefault();
