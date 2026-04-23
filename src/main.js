@@ -37,6 +37,7 @@ let localAvatarParts = null;
 
 let playerName = "Player";
 let uiTexture = null;
+let appStarted = false;
 const remoteNameLabels = new Map();
 
 const AVATAR_RIG = {
@@ -918,7 +919,14 @@ async function unlockAudio() {
 window.addEventListener("click", unlockAudio, { once: true });
 window.addEventListener("touchstart", unlockAudio, { once: true });
 
-async function main() {
+export async function launchApp(options = {}) {
+  if (appStarted) return;
+  appStarted = true;
+
+  if (options.playerName) {
+    playerName = options.playerName;
+  }
+
   try {
     localStream = await navigator.mediaDevices.getUserMedia({
       audio: {
@@ -957,7 +965,7 @@ async function main() {
     if (externalSceneLoader) {
       scene = await externalSceneLoader(engine);
     } else {
-      scene = await startScene(engine); 
+      scene = await startScene(engine);
   }
 
   sceneRef = scene;
@@ -1119,13 +1127,15 @@ async function handleJoin() {
   joinOverlay.style.display = "none";
 
   await unlockAudio();
-  await main();
+  await launchApp();
 }
 
-joinButton.addEventListener("click", handleJoin);
+if (joinButton && nameInput) {
+  joinButton.addEventListener("click", handleJoin);
 
-nameInput.addEventListener("keydown", async (e) => {
-  if (e.key === "Enter") {
-    await handleJoin();
-  }
-});
+  nameInput.addEventListener("keydown", async (e) => {
+    if (e.key === "Enter") {
+      await handleJoin();
+    }
+  });
+}

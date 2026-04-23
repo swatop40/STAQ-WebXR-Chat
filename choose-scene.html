@@ -93,36 +93,38 @@
     <canvas id="renderCanvas"></canvas>
 
     <script type="module">
-  import { setSceneLoader } from "/src/main.js";
+      import { launchApp, setSceneLoader } from "/src/main.js";
+      import { loadScene as loadStartScene } from "/src/scenes/start.js";
+      import { loadScene as loadBarScene } from "/src/scenes/bar.js";
+      import { loadScene as loadParkingScene } from "/src/scenes/parking-WIP.js";
 
-  const canvas = document.getElementById("renderCanvas");
-  const overlay = document.getElementById("joinOverlay");
-  const buttons = document.querySelectorAll(".sceneButton");
+      const overlay = document.getElementById("joinOverlay");
+      const buttons = document.querySelectorAll(".sceneButton");
 
-  buttons.forEach((btn) => {
-    btn.addEventListener("click", async () => {
-      const sceneKey = btn.dataset.scene;
-
-      const sceneMap = {
-        start: "/src/scenes/start.js",
-        bar: "/src/scenes/bar.js",
-        parking: "/src/scenes/parking.js",
+      const sceneLoaders = {
+        start: loadStartScene,
+        bar: loadBarScene,
+        parking: loadParkingScene,
       };
 
-      const modulePath = sceneMap[sceneKey];
-      const sceneModule = await import(modulePath);
+      buttons.forEach((btn) => {
+        btn.addEventListener("click", async () => {
+          const sceneKey = btn.dataset.scene;
+          const loadScene = sceneLoaders[sceneKey];
+          if (!loadScene) return;
 
-        setSceneLoader(async (engine) => {
-         return await sceneModule.loadScene(engine);
-       });
+          buttons.forEach((button) => {
+            button.disabled = true;
+          });
 
-     
-       overlay.style.display = "none";
+          setSceneLoader(loadScene);
+          overlay.style.display = "none";
 
-
-     });
-    });
-</script>
+          await launchApp({
+            playerName: sessionStorage.getItem("nameInput") || "Player",
+          });
+        });
+      });
     </script>
   </body>
 </html>
