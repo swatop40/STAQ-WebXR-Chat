@@ -91,8 +91,13 @@ export function createBaseScene(engine, options = {}) {
   camera.rotation = Vector3.Zero();
   camera.attachControl();
   camera.inputs.clear();
-  camera.inputs.add(new BABYLON.FreeCameraMouseInput());
-  camera.attachControl(scene.getEngine().getRenderingCanvas(), true);
+  const mouseInput = new BABYLON.FreeCameraMouseInput();
+  mouseInput.buttons = [2];
+  camera.inputs.add(mouseInput);
+
+  const canvas = scene.getEngine().getRenderingCanvas();
+  canvas?.addEventListener("contextmenu", (event) => event.preventDefault());
+  camera.attachControl(canvas, true);
   camera.inertia = 0;
 
   new HemisphericLight("light", new Vector3(0, 2, 0), scene);

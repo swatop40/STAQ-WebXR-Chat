@@ -5,10 +5,14 @@ import {
   MeshBuilder,
   MirrorTexture,
   Plane,
+  PhysicsImpostor,
+  PointerEventTypes,
   Quaternion,
+  Ray,
   StandardMaterial,
   TransformNode,
   Vector3,
+  VertexBuffer,
   WebXRFeatureName,
   WebXRState,
   ActionManager,
@@ -65,6 +69,12 @@ function isMobileBrowser() {
     (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
 }
 
+function worldToLocalPosition(node, worldPos) {
+  const inv = node.getWorldMatrix().clone();
+  inv.invert();
+  return Vector3.TransformCoordinates(worldPos, inv);
+}
+
 function setupMirror(scene, mirror) {
   if (!mirror) return null;
 
@@ -97,6 +107,464 @@ function setupMirror(scene, mirror) {
   scene.mirrorMesh = mirror;
 
   return { mirrorTex, updateMirrorPlane };
+}
+
+function setupDartInteractions(scene, xr) {
+  const xrGripStates = new Map();
+  const xrHeldDarts = new Map();
+  const xrMotionSamples = new Map();
+  const flyingDarts = new Set();
+  const desktopHold = {
+    root: null,
+    anchor: null,
+    viewRoot: null,
+    charging: false,
+    chargeStartedAt: 0,
+  };
+
+  const desktopChargeMaxMs = 1600;
+  const desktopMinThrowSpeed = 4.5;
+  const desktopMaxThrowSpeed = 13;
+  const dartFlightRotationOffset = Quaternion.FromEulerAngles(0, Math.PI, 0);
+  const desktopHeldDartRotation = Quaternion.FromEulerAngles(0.35, 0, -0.22);
+
+  function getDartRoot(mesh) {
+    let current = mesh;
+    while (current) {
+      if (current.metadata?.isThrowableDart) {
+        return current.metadata.dartRoot || current;
+      }
+      current = current.parent;
+    }
+    return null;
+  }
+
+  function getDartBoardRoot(mesh) {
+    let current = mesh;
+    while (current) {
+      if (current.metadata?.isDartBoardTarget) {
+        return current.metadata.dartBoardRoot || current;
+      }
+      current = current.parent;
+    }
+    return null;
+  }
+
+  function setDartPickable(root, isPickable) {
+    root.isPickable = isPickable;
+    for (const child of root.getChildMeshes(false)) {
+      child.isPickable = isPickable;
+    }
+  }
+
+  function setDartVisible(root, isVisible) {
+    root.setEnabled(isVisible);
+  }
+
+  function cloneDartForDesktopView(root) {
+    const viewRoot = root.clone(`${root.name}_desktopView`, null, false);
+    viewRoot.isPickable = false;
+    viewRoot.metadata = {
+      isDesktopHeldDartView: true,
+      sourceDart: root,
+    };
+    viewRoot.setEnabled(true);
+
+    for (const mesh of viewRoot.getChildMeshes(false)) {
+      mesh.isPickable = false;
+      mesh.renderingGroupId = 2;
+      mesh.alwaysSelectAsActiveMesh = true;
+      mesh.metadata = {
+        ...(mesh.metadata || {}),
+        isDesktopHeldDartView: true,
+        sourceDart: root,
+      };
+    }
+
+    return viewRoot;
+  }
+
+  function pickDartWithRay(ray) {
+    const pick = scene.pickWithRay(ray, (mesh) => !!getDartRoot(mesh));
+    return pick?.hit ? getDartRoot(pick.pickedMesh) : null;
+  }
+
+  function pickDesktopDart() {
+    const pick = scene.pick(scene.pointerX, scene.pointerY, (mesh) => !!getDartRoot(mesh));
+    return pick?.hit ? getDartRoot(pick.pickedMesh) : null;
+  }
+
+  function getControllerRay(controller) {
+    const pointer = controller.pointer || controller.grip;
+    if (!pointer) return null;
+
+    const origin = pointer.getAbsolutePosition();
+    const direction = pointer.getDirection(Axis.Z);
+    if (direction.lengthSquared() < 0.0001) return null;
+
+    direction.normalize();
+    return new Ray(origin, direction, 6);
+  }
+
+  function isGripPressed(controller) {
+    const components = controller.motionController?.components || {};
+    for (const [id, component] of Object.entries(components)) {
+      const normalizedId = id.toLowerCase();
+      if (
+        normalizedId.includes("squeeze") ||
+        normalizedId.includes("grip") ||
+        normalizedId === "xr-standard-squeeze"
+      ) {
+        return !!component.pressed;
+      }
+    }
+
+    const squeezeButton = controller.inputSource?.gamepad?.buttons?.[1];
+    return !!squeezeButton?.pressed;
+  }
+
+  function disposeDartPhysics(root) {
+    if (root.physicsImpostor) {
+      root.physicsImpostor.dispose();
+      root.physicsImpostor = null;
+    }
+  }
+
+  function ensureDartPhysics(root) {
+    if (!root.physicsImpostor) {
+      root.physicsImpostor = new PhysicsImpostor(
+        root,
+        PhysicsImpostor.BoxImpostor,
+        { mass: 0.08, restitution: 0.15, friction: 0.6 },
+        scene
+      );
+    }
+    return root.physicsImpostor;
+  }
+
+  function alignDartWithVelocity(root, velocity) {
+    if (!root || !velocity || velocity.lengthSquared() < 0.01) return;
+
+    const direction = velocity.normalizeToNew();
+    root.rotationQuaternion = Quaternion
+      .FromLookDirectionLH(direction, Vector3.Up())
+      .multiply(dartFlightRotationOffset);
+  }
+
+  function getDartTipOffset(root, direction) {
+    root.computeWorldMatrix(true);
+    const origin = root.getAbsolutePosition();
+    let bestProjection = -Infinity;
+
+    for (const mesh of [root, ...root.getChildMeshes(false)]) {
+      const positions = mesh.getVerticesData?.(VertexBuffer.PositionKind);
+      if (!positions?.length) continue;
+
+      const matrix = mesh.computeWorldMatrix(true);
+      for (let index = 0; index < positions.length; index += 3) {
+        const vertex = Vector3.TransformCoordinates(
+          new Vector3(positions[index], positions[index + 1], positions[index + 2]),
+          matrix
+        );
+        bestProjection = Math.max(
+          bestProjection,
+          Vector3.Dot(vertex.subtract(origin), direction)
+        );
+      }
+    }
+
+    if (Number.isFinite(bestProjection)) {
+      return direction.scale(Math.max(bestProjection, 0.04));
+    }
+
+    return direction.scale(0.16);
+  }
+
+  function stickDartToBoard(root, pick, velocity) {
+    const boardRoot = getDartBoardRoot(pick.pickedMesh);
+    if (!root || !boardRoot || !pick.pickedPoint) return false;
+
+    disposeDartPhysics(root);
+    flyingDarts.delete(root);
+
+    root.setParent(null);
+    const velocityDirection = velocity.normalizeToNew();
+    const surfaceNormal = pick.getNormal?.(true, true);
+    const impactDirection = surfaceNormal?.lengthSquared?.() > 0.0001
+      ? surfaceNormal.normalizeToNew().scale(Vector3.Dot(surfaceNormal, velocityDirection) >= 0 ? 1 : -1)
+      : velocityDirection;
+    alignDartWithVelocity(root, impactDirection);
+    root.computeWorldMatrix(true);
+    const tipOffset = getDartTipOffset(root, impactDirection);
+    const embedDepth = 0.045;
+    root.position.copyFrom(
+      pick.pickedPoint
+        .subtract(tipOffset)
+        .add(impactDirection.scale(embedDepth))
+    );
+    setDartPickable(root, false);
+
+    root.setParent(null);
+    console.log("[DART] Stuck to dart board");
+    return true;
+  }
+
+  function tryStickDartToBoard(root, velocity) {
+    if (!root || !velocity || velocity.lengthSquared() < 0.2) return false;
+
+    const direction = velocity.normalizeToNew();
+    const speed = velocity.length();
+    const rayLength = Math.max(0.35, speed * scene.getEngine().getDeltaTime() / 1000 + 0.2);
+    const origin = root.absolutePosition || root.getAbsolutePosition();
+    const ray = new Ray(origin, direction, rayLength);
+    const pick = scene.pickWithRay(ray, (mesh) => !!getDartBoardRoot(mesh));
+
+    if (!pick?.hit) return false;
+    return stickDartToBoard(root, pick, velocity);
+  }
+
+  function holdDartOnController(root, controller) {
+    const holder = controller.grip || controller.pointer;
+    if (!root || !holder) return false;
+
+    disposeDartPhysics(root);
+    setDartPickable(root, false);
+    root.setParent(holder);
+    root.position.set(0.035, -0.025, 0.09);
+    root.rotationQuaternion = Quaternion.FromEulerAngles(Math.PI / 2, 0, 0);
+    return true;
+  }
+
+  function holdDartOnDesktop(root) {
+    const cam = scene.activeCamera;
+    if (!root || !cam) return false;
+
+    disposeDartPhysics(root);
+    setDartPickable(root, false);
+    setDartVisible(root, true);
+
+    const anchor = desktopHold.anchor || new TransformNode("desktopHeldDartAnchor", scene);
+    desktopHold.anchor = anchor;
+    anchor.parent = cam;
+    anchor.position.set(0.22, -0.18, 0.55);
+    anchor.rotationQuaternion = Quaternion.Identity();
+
+    desktopHold.viewRoot?.dispose(false, true);
+    const viewRoot = cloneDartForDesktopView(root);
+    viewRoot.setParent(anchor);
+    viewRoot.position.set(0, 0, 0);
+    viewRoot.rotationQuaternion = desktopHeldDartRotation;
+    viewRoot.computeWorldMatrix(true);
+    const bounds = viewRoot.getHierarchyBoundingVectors(true);
+    const centerWorld = bounds.min.add(bounds.max).scale(0.5);
+    viewRoot.position.copyFrom(worldToLocalPosition(anchor, centerWorld).scale(-1));
+
+    root.setParent(anchor);
+    root.position.set(0.36, -0.42, 1.05);
+    root.rotationQuaternion = desktopHeldDartRotation;
+    desktopHold.root = root;
+    desktopHold.viewRoot = viewRoot;
+    desktopHold.charging = false;
+    desktopHold.chargeStartedAt = 0;
+    return true;
+  }
+
+  function releaseDart(root, velocity) {
+    if (!root) return;
+
+    const world = root.computeWorldMatrix(true);
+    const worldPos = world.getTranslation();
+
+    root.setParent(null);
+    root.position.copyFrom(worldPos);
+    alignDartWithVelocity(root, velocity);
+    setDartPickable(root, true);
+
+    const impostor = ensureDartPhysics(root);
+    impostor.setLinearVelocity(velocity);
+    impostor.setAngularVelocity(Vector3.Zero());
+    flyingDarts.add(root);
+  }
+
+  function releaseDesktopDart(root, velocity) {
+    const cam = scene.activeCamera;
+    if (!root || !cam) return;
+
+    desktopHold.viewRoot?.dispose(false, true);
+    desktopHold.viewRoot = null;
+
+    const spawnPos = cam.globalPosition
+      .add(cam.getDirection(Axis.Z).normalize().scale(0.7))
+      .add(cam.getDirection(Axis.X).normalize().scale(0.18))
+      .add(cam.getDirection(Axis.Y).normalize().scale(-0.12));
+
+    root.setParent(null);
+    root.position.copyFrom(spawnPos);
+    setDartVisible(root, true);
+    releaseDart(root, velocity);
+  }
+
+  function addControllerMotionSample(controller, controllerId) {
+    const holder = controller.grip || controller.pointer;
+    if (!holder) return;
+
+    const samples = xrMotionSamples.get(controllerId) || [];
+    samples.push({
+      time: performance.now(),
+      position: holder.getAbsolutePosition().clone(),
+    });
+
+    while (samples.length > 8) {
+      samples.shift();
+    }
+
+    xrMotionSamples.set(controllerId, samples);
+  }
+
+  function getControllerThrowVelocity(controllerId, controller) {
+    const samples = xrMotionSamples.get(controllerId) || [];
+    const latest = samples[samples.length - 1];
+    let previous = null;
+
+    if (!latest) {
+      const ray = getControllerRay(controller);
+      return ray ? ray.direction.scale(5) : new Vector3(0, 1.5, 4);
+    }
+
+    for (let i = samples.length - 2; i >= 0; i -= 1) {
+      if (latest.time - samples[i].time >= 45) {
+        previous = samples[i];
+        break;
+      }
+    }
+
+    if (latest && previous) {
+      const dt = Math.max((latest.time - previous.time) / 1000, 0.001);
+      const velocity = latest.position.subtract(previous.position).scale(1 / dt);
+      if (velocity.length() > 0.5) {
+        return velocity.scale(1.15);
+      }
+    }
+
+    const ray = getControllerRay(controller);
+    return ray ? ray.direction.scale(5) : new Vector3(0, 1.5, 4);
+  }
+
+  function getDesktopChargeAmount() {
+    if (!desktopHold.charging) return 0;
+    return Math.min((performance.now() - desktopHold.chargeStartedAt) / desktopChargeMaxMs, 1);
+  }
+
+  scene.onPointerObservable.add((pointerInfo) => {
+    if (isInXR(scene)) return;
+
+    const button = pointerInfo.event?.button;
+    if (button != null && button !== 0) return;
+
+    if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+      if (!desktopHold.root) {
+        const dart = pickDesktopDart();
+        if (dart) {
+          holdDartOnDesktop(dart);
+        }
+        return;
+      }
+
+      desktopHold.charging = true;
+      desktopHold.chargeStartedAt = performance.now();
+      return;
+    }
+
+    if (pointerInfo.type === PointerEventTypes.POINTERUP && desktopHold.root && desktopHold.charging) {
+      const cam = scene.activeCamera;
+      const charge = getDesktopChargeAmount();
+      const speed = desktopMinThrowSpeed + (desktopMaxThrowSpeed - desktopMinThrowSpeed) * charge;
+      const direction = cam.getDirection(Axis.Z).normalize();
+      const velocity = direction.scale(speed).add(new Vector3(0, 1.2 + charge * 1.6, 0));
+
+      releaseDesktopDart(desktopHold.root, velocity);
+      desktopHold.root = null;
+      desktopHold.charging = false;
+      desktopHold.chargeStartedAt = 0;
+    }
+  });
+
+  scene.onBeforeRenderObservable.add(() => {
+    if (desktopHold.viewRoot && !isInXR(scene)) {
+      const charge = getDesktopChargeAmount();
+      const chargedRotation = Quaternion.FromEulerAngles(
+        0.35 - charge * 0.55,
+        0,
+        -0.22
+      );
+      desktopHold.viewRoot.rotationQuaternion = chargedRotation;
+      if (desktopHold.root) {
+        desktopHold.root.rotationQuaternion = chargedRotation;
+      }
+    }
+
+    for (const dart of Array.from(flyingDarts)) {
+      const velocity = dart.physicsImpostor?.getLinearVelocity?.();
+      if (!velocity || velocity.lengthSquared() < 0.2) {
+        dart.physicsImpostor?.setAngularVelocity(Vector3.Zero());
+        flyingDarts.delete(dart);
+        continue;
+      }
+
+      if (tryStickDartToBoard(dart, velocity)) {
+        continue;
+      }
+
+      alignDartWithVelocity(dart, velocity);
+      dart.physicsImpostor?.setAngularVelocity(Vector3.Zero());
+    }
+  });
+
+  if (!xr) return;
+
+  xr.baseExperience.sessionManager.onXRFrameObservable.add(() => {
+    if (!isInXR(scene)) {
+      xrGripStates.clear();
+      xrHeldDarts.clear();
+      xrMotionSamples.clear();
+      return;
+    }
+
+    if (desktopHold.root) {
+      desktopHold.viewRoot?.dispose(false, true);
+      desktopHold.viewRoot = null;
+      setDartVisible(desktopHold.root, true);
+      setDartPickable(desktopHold.root, true);
+      desktopHold.root = null;
+      desktopHold.charging = false;
+      desktopHold.chargeStartedAt = 0;
+    }
+
+    for (const controller of xr.input.controllers) {
+      const controllerId = controller.uniqueId || controller.inputSource?.handedness || "unknown";
+      const isPressed = isGripPressed(controller);
+      const wasPressed = xrGripStates.get(controllerId) ?? false;
+
+      addControllerMotionSample(controller, controllerId);
+
+      if (isPressed && !wasPressed && !xrHeldDarts.has(controllerId)) {
+        const ray = getControllerRay(controller);
+        const dart = ray ? pickDartWithRay(ray) : null;
+        if (dart && holdDartOnController(dart, controller)) {
+          xrHeldDarts.set(controllerId, dart);
+        }
+      }
+
+      if (!isPressed && wasPressed && xrHeldDarts.has(controllerId)) {
+        const dart = xrHeldDarts.get(controllerId);
+        const velocity = getControllerThrowVelocity(controllerId, controller);
+        releaseDart(dart, velocity);
+        xrHeldDarts.delete(controllerId);
+      }
+
+      xrGripStates.set(controllerId, isPressed);
+    }
+  });
 }
 
 function setupMenu(scene, xr, applyXRMovementMode, settings) {
@@ -787,6 +1255,7 @@ export async function setupSharedWebXR(scene, options) {
 
   const mirrorSetup = setupMirror(scene, mirror);
   const menu = setupMenu(scene, xr, applyXRMovementMode, settings);
+  setupDartInteractions(scene, xr);
   let lastSnapTurnAt = 0;
 
   function rotateXRView(angle) {

@@ -1,4 +1,4 @@
-import { Vector3 } from "babylonjs";
+import { PBRMaterial, Vector3 } from "babylonjs";
 import {
   createBaseScene,
   createMirror,
@@ -33,29 +33,33 @@ async function addTestRoomProps(scene) {
     new Vector3(0.5, 0.5, 0.5)
   );
 
-  await placeObjectModel(
+  const dartBoard = await placeObjectModel(
     scene,
     "dart-target.glb",
     new Vector3(-7.16, 2.11, 10.98),
     new Vector3(0, -Math.PI / 2, 0),
     new Vector3(0.7, 0.7, 0.7)
   );
+  forceOpaqueDartBoardTexture(dartBoard);
+  markDartBoardTarget(dartBoard);
 
-  await placeObjectModel(
+  const blueDart = await placeObjectModel(
     scene,
     "dart-blue.glb",
     new Vector3(0.80, 1.76, 9.24),
     new Vector3(0, Math.PI / 6, 0),
     new Vector3(0.19, 0.19, 0.19)
   );
+  markDartInteractable(blueDart);
 
-  await placeObjectModel(
+  const redDart = await placeObjectModel(
     scene,
     "dart-red.glb",
     new Vector3(1.84, 1.76, 9.24),
     new Vector3(0, 0, -Math.PI / 6),
     new Vector3(0.19, 0.19, 0.19)
   );
+  markDartInteractable(redDart);
 
   await placeObjectModel(
     scene,
@@ -64,6 +68,73 @@ async function addTestRoomProps(scene) {
     new Vector3(0, Math.PI / 1.5, 0),
     new Vector3(0.8, 0.8, 0.8)
   );
+}
+
+function markDartInteractable(result) {
+  const root = result.meshes[0];
+  if (!root) return;
+
+  root.metadata = {
+    ...(root.metadata || {}),
+    isThrowableDart: true,
+    dartRoot: root,
+  };
+
+  for (const mesh of result.meshes) {
+    mesh.isPickable = true;
+    mesh.metadata = {
+      ...(mesh.metadata || {}),
+      isThrowableDart: true,
+      dartRoot: root,
+    };
+  }
+}
+
+function markDartBoardTarget(result) {
+  const root = result.meshes[0];
+  if (!root) return;
+
+  root.metadata = {
+    ...(root.metadata || {}),
+    isDartBoardTarget: true,
+    dartBoardRoot: root,
+  };
+
+  for (const mesh of result.meshes) {
+    mesh.isPickable = true;
+    mesh.metadata = {
+      ...(mesh.metadata || {}),
+      isDartBoardTarget: true,
+      dartBoardRoot: root,
+    };
+  }
+}
+
+function forceOpaqueDartBoardTexture(result) {
+  const materials = new Set(
+    result.meshes
+      .map((mesh) => mesh.material)
+      .filter(Boolean)
+  );
+
+  for (const material of materials) {
+    material.alpha = 1;
+    material.backFaceCulling = false;
+
+    if ("transparencyMode" in material) {
+      material.transparencyMode = PBRMaterial.PBRMATERIAL_OPAQUE;
+    }
+
+    if ("useAlphaFromAlbedoTexture" in material) {
+      material.useAlphaFromAlbedoTexture = false;
+    }
+
+    for (const texture of [material.albedoTexture, material.diffuseTexture]) {
+      if (!texture) continue;
+      texture.hasAlpha = false;
+      texture.getAlphaFromRGB = false;
+    }
+  }
 }
 
 function addTestRoomCollision(scene) {
