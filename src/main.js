@@ -122,46 +122,38 @@ let localStream = null;
 let micMode = "open";
 let sceneVolume = 1;
 let playerVolume = 1;
+const VOICE_RADIUS = 12;
 const peerConnections = new Map();
 const remoteAudioEls = new Map();
-const remoteSounds = new Map();
-const readySpatialSounds = new Set();
+
+function logConnectedPlayers(context, playersLike = null) {
+  const ids = playersLike
+    ? Object.values(playersLike)
+        .map((p) => p?.id)
+        .filter(Boolean)
+    : Array.from(remoteMeshes.keys());
+
+  console.log(`[NET] ${context} connected players:`, ids);
+}
 
 function cleanupRemoteAudio(playerId) {
   const audioEl = remoteAudioEls.get(playerId);
   if (audioEl) {
     try {
       audioEl.pause();
+    } catch (err) {
+      console.warn("[VOICE] remote audio pause issue:", playerId, err);
+    }
+
+    try {
       audioEl.srcObject = null;
       audioEl.remove();
     } catch (err) {
-      console.warn("[VOICE] audio cleanup issue:", playerId, err);
+      console.warn("[VOICE] remote audio cleanup issue:", playerId, err);
     }
+
     remoteAudioEls.delete(playerId);
   }
-
-  const sound = remoteSounds.get(playerId);
-  if (sound) {
-    try {
-      if (typeof sound.stop === "function") {
-        sound.stop();
-      }
-    } catch (err) {
-      console.warn("[VOICE] sound.stop issue:", playerId, err);
-    }
-
-    try {
-      if (typeof sound.dispose === "function") {
-        sound.dispose();
-      }
-    } catch (err) {
-      console.warn("[VOICE] sound.dispose issue:", playerId, err);
-    }
-
-    remoteSounds.delete(playerId);
-  }
-
-  readySpatialSounds.delete(playerId);
 }
 
 function clamp01(value) {
@@ -180,9 +172,81 @@ function applyMicMode() {
 }
 
 function applyPlayerVolume() {
-  for (const audio of remoteAudioEls.values()) {
-    audio.volume = playerVolume;
+  for (const playerId of remoteAudioEls.keys()) {
+    updateRemoteAudioVolume(playerId);
   }
+}
+
+function applySceneVolume() {
+  const audioEngine = BABYLON.Engine.audioEngine;
+  if (audioEngine?.setGlobalVolume) {
+    audioEngine.setGlobalVolume(sceneVolume);
+  }
+}
+
+function getRemoteVoiceMesh(playerId) {
+  const remoteRoot = remoteMeshes.get(playerId);
+  if (!remoteRoot) return null;
+
+  return (
+    remoteRoot.metadata?.headMesh ||
+    remoteRoot.metadata?.bodyMesh ||
+    remoteRoot.getChildMeshes(false)[0] ||
+    null
+  );
+}
+
+function getRemoteVoicePosition(playerId) {
+  const voiceMesh = getRemoteVoiceMesh(playerId);
+  return voiceMesh?.getAbsolutePosition?.() || null;
+}
+
+function getVoiceFalloff(distance) {
+  if (!Number.isFinite(distance)) return 0;
+  if (distance >= VOICE_RADIUS) return 0;
+  if (distance <= 0) return 1;
+  return 1 - (distance / VOICE_RADIUS);
+}
+
+function updateRemoteAudioVolume(playerId) {
+  const audioEl = remoteAudioEls.get(playerId);
+  const listenerCamera = sceneRef?.activeCamera;
+  const voicePosition = getRemoteVoicePosition(playerId);
+  if (!audioEl || !listenerCamera || !voicePosition) return;
+
+  const listenerPos = listenerCamera.globalPosition || listenerCamera.position;
+  const distance = BABYLON.Vector3.Distance(listenerPos, voicePosition);
+  const falloff = getVoiceFalloff(distance);
+  audioEl.volume = clamp01(sceneVolume * playerVolume * falloff);
+}
+
+function updateAllRemoteAudioVolumes() {
+  for (const playerId of remoteAudioEls.keys()) {
+    updateRemoteAudioVolume(playerId);
+  }
+}
+
+async function createRemoteAudio(playerId, stream) {
+  cleanupRemoteAudio(playerId);
+
+  const audioEl = document.createElement("audio");
+  audioEl.autoplay = true;
+  audioEl.playsInline = true;
+  audioEl.controls = false;
+  audioEl.muted = false;
+  audioEl.style.display = "none";
+  audioEl.srcObject = stream;
+  document.body.appendChild(audioEl);
+  remoteAudioEls.set(playerId, audioEl);
+  updateRemoteAudioVolume(playerId);
+
+  try {
+    await audioEl.play();
+  } catch (err) {
+    console.warn("[VOICE] remote audio play failed:", playerId, err);
+  }
+
+  return audioEl;
 }
 
 function getPercentLabel(value) {
@@ -214,6 +278,7 @@ function createAudioControls() {
     },
     adjustSceneVolume(delta) {
       sceneVolume = clamp01(sceneVolume + delta);
+      applySceneVolume();
       console.log(`[AUDIO] Scene volume: ${getPercentLabel(sceneVolume)}`);
       return sceneVolume;
     },
@@ -920,6 +985,8 @@ function removePeerConnection(id) {
     pc.close();
     peerConnections.delete(id);
   }
+
+  cleanupRemoteAudio(id);
 }
 function extractYaw(camera) {
   if (camera.rotationQuaternion) {
@@ -983,82 +1050,21 @@ function createPeerConnection(targetId) {
     console.log("[VOICE] ontrack stream count:", event.streams.length);
     console.log("[VOICE] ontrack kind:", event.track?.kind);
 
-   const stream = event.streams[0];
-if (!stream) return;
+    const stream = event.streams[0];
+    if (!stream) return;
 
-let audio = remoteAudioEls.get(targetId);
-if (!audio) {
-  audio = document.createElement("audio");
-  audio.autoplay = true;
-  audio.playsInline = true;
-  audio.controls = false;
-  audio.style.display = "none";
-  document.body.appendChild(audio);
-  remoteAudioEls.set(targetId, audio);
-}
+    const audioEl = await createRemoteAudio(targetId, stream);
+    if (!audioEl) {
+      console.warn("[VOICE] Failed to create remote audio for", targetId);
+      return;
+    }
 
-audio.srcObject = stream;
+    event.track.onmute = () => console.warn("[VOICE] Remote track muted:", targetId);
+    event.track.onunmute = () => console.log("[VOICE] Remote track unmuted:", targetId);
+    event.track.onended = () => console.warn("[VOICE] Remote track ended:", targetId);
 
-  cleanupRemoteAudio(targetId);
-
-  const audio = document.createElement("audio");
-  audio.autoplay = true;
-  audio.playsInline = true;
-  audio.controls = false;
-  audio.style.display = "none";
-  audio.srcObject = stream;
-  document.body.appendChild(audio);
-  remoteAudioEls.set(targetId, audio);
-
-const sound = new BABYLON.Sound(
-  `voice_${targetId}`,
-  audio,
-  sceneRef,
-  null,
-  {
-    loop: true,
-    autoplay: true,
-    spatialSound: true,
-    streaming: true,
-    distanceModel: "linear",
-    maxDistance: 8,
-    refDistance: 1,
-    rolloffFactor: 4
-  }
-);
-
-remoteSounds.set(targetId, sound);
-readySpatialSounds.add(targetId);
-
-console.log("[VOICE] sound created for:", targetId);
-console.log("[VOICE] spatialSound:", sound.spatialSound);
-
-const remoteRoot = remoteMeshes.get(targetId);
-const voiceMesh =
-  remoteRoot?.metadata?.headMesh ||
-  remoteRoot?.metadata?.bodyMesh ||
-  remoteRoot;
-
-if (voiceMesh) {
-  try {
-    sound.attachToMesh(voiceMesh);
-    console.log("[VOICE] attached to voice mesh immediately:", targetId, voiceMesh.name);
-  } catch (err) {
-    console.warn("[VOICE] immediate attach failed:", targetId, err);
-  }
-} else {
-  console.warn("[VOICE] no voice mesh yet for:", targetId);
-}
-
-sound.setVolume(1);
-
-try {
-  await audio.play();
-  audio.volume = 0;
-  console.log("[VOICE] Playback started for:", targetId);
-} catch (err) {
-  console.error("[VOICE] audio.play() failed for:", targetId, err);
-}
+    updateRemoteAudioVolume(targetId);
+    console.log("[VOICE] Proximity audio ready for:", targetId);
   };
 
   pc.onconnectionstatechange = () => {
@@ -1080,6 +1086,7 @@ try {
 socket.on("init", async ({ selfId: id, players }) => {
   selfId = id;
   console.log("[NET] init selfId:", selfId);
+  logConnectedPlayers("init", players);
 
   if (!sceneRef) return;
 
@@ -1088,6 +1095,7 @@ socket.on("init", async ({ selfId: id, players }) => {
   );
 
   await Promise.all(otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id)));
+  logConnectedPlayers("after init");
 });
 
 socket.on("playerJoined", async (p) => {
@@ -1095,22 +1103,7 @@ socket.on("playerJoined", async (p) => {
   console.log("[NET] playerJoined:", p.id);
 
   await ensureRemoteMesh(sceneRef, p.id);
-
-const existingSound = remoteSounds.get(p.id);
-const existingMesh = remoteMeshes.get(p.id);
-const voiceMesh =
-  existingMesh?.metadata?.headMesh ||
-  existingMesh?.metadata?.bodyMesh ||
-  existingMesh;
-
-if (existingSound && voiceMesh) {
-  try {
-    existingSound.attachToMesh(voiceMesh);
-    console.log("[VOICE] late attach after playerJoined:", p.id, voiceMesh.name);
-  } catch (err) {
-    console.warn("[VOICE] late attach after playerJoined failed:", p.id, err);
-  }
-}
+  updateRemoteAudioVolume(p.id);
 
   try {
     const pc = createPeerConnection(p.id);
@@ -1127,6 +1120,7 @@ if (existingSound && voiceMesh) {
     });
 
     console.log("[VOICE] Sent offer to:", p.id);
+    logConnectedPlayers("after join");
   } catch (err) {
     console.error("[VOICE] Error creating offer:", err);
   }
@@ -1137,6 +1131,7 @@ socket.on("playerLeft", (id) => {
   removeRemoteMesh(id);
   cleanupRemoteAudio(id);
   removePeerConnection(id);
+  logConnectedPlayers("after leave");
 });
 
 socket.on("playersUpdate", async (players) => {
@@ -1152,29 +1147,6 @@ socket.on("playersUpdate", async (players) => {
       if (!mesh) continue;
     }
 
-const existingSound = remoteSounds.get(id);
-const voiceMesh =
-  mesh?.metadata?.headMesh ||
-  mesh?.metadata?.bodyMesh ||
-  mesh;
-
-if (existingSound && voiceMesh) {
-  try {
-    existingSound.attachToMesh(voiceMesh);
-
-    const absPos = voiceMesh.getAbsolutePosition();
-    console.log(
-      "[VOICE] voice mesh world pos:",
-      id,
-      absPos.x,
-      absPos.y,
-      absPos.z
-    );
-  } catch (err) {
-    console.warn("[VOICE] late attach failed:", id, err);
-  }
-}
-
     ensureRemoteNameLabel(id, mesh, p.name || "Player");
 
     applyAvatarTransform(
@@ -1188,15 +1160,6 @@ if (existingSound && voiceMesh) {
       p.avatarMode || "desktop"
     );
 
-    console.log(
-  "[VOICE] mesh moving:",
-  id,
-  "pos:",
-  mesh.position.x,
-  mesh.position.y,
-  mesh.position.z
-);
-
     mesh.rotation.y = p.root?.rotY ?? 0;
 
     applyAvatarPose(mesh.metadata, mesh, {
@@ -1206,6 +1169,8 @@ if (existingSound && voiceMesh) {
       leftHand: p.leftHand,
       rightHand: p.rightHand,
     });
+
+    updateRemoteAudioVolume(id);
   }
 });
 
@@ -1268,15 +1233,14 @@ let audioUnlocked = false;
 
 async function unlockAudio() {
   if (audioUnlocked) return;
-  audioUnlocked = true;
 
   try {
-    const testAudio = document.createElement("audio");
-    testAudio.autoplay = true;
-    testAudio.playsInline = true;
-    document.body.appendChild(testAudio);
-    await testAudio.play().catch(() => {});
-    testAudio.remove();
+    const audioEngine = BABYLON.Engine.audioEngine;
+    const ctx = audioEngine?.audioContext;
+    if (ctx?.state === "suspended") {
+      await ctx.resume();
+    }
+    audioUnlocked = true;
     console.log("[VOICE] Audio unlocked");
   } catch (err) {
     console.warn("[VOICE] Audio unlock failed:", err);
@@ -1341,6 +1305,8 @@ export async function launchApp(options = {}) {
   scene.voiceControls = createVoiceControls();
   scene.audioControls = createAudioControls();
   uiTexture = GUI.AdvancedDynamicTexture.CreateFullscreenUI("nameUI", true, scene);
+  applySceneVolume();
+  applyPlayerVolume();
 
   await ensureLocalAvatar(scene);
 
@@ -1356,7 +1322,11 @@ export async function launchApp(options = {}) {
   engine.runRenderLoop(() => {
     scene.render();
 
-    if (!socket.connected || !scene.activeCamera) return;
+    if (!scene.activeCamera) return;
+
+    updateAllRemoteAudioVolumes();
+
+    if (!socket.connected) return;
 
     const now = performance.now();
     if (now - lastSend < 1000 / SEND_HZ) return;
