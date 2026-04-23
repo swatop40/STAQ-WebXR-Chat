@@ -46,8 +46,7 @@ function isMobileBrowser() {
 }
 
 function shouldShowDebugLayer() {
-  return new URLSearchParams(window.location.search).get("debug") === "1" &&
-    !isMobileBrowser();
+  return !isMobileBrowser();
 }
 
 function showRuntimeError(message, error = null) {
@@ -93,8 +92,10 @@ const AVATAR_RIG = {
   bodyVisualScale: new BABYLON.Vector3(0.78, 0.78, 0.78),
   headVisualScale: new BABYLON.Vector3(0.92, 0.92, 0.92),
   nameAnchorOffset: new BABYLON.Vector3(0, 3.2, 0),
-  headAnchorYOffset: -1.0,
+  visualYOffset: -1.9,
+  headAnchorYOffset: 0,
   desktopBodyAnchorHeadOffset: .2,
+  xrBodyAnchorYOffset: -0.5,
   handAnchorYOffset: 0.2,
   leftShoulderOffset: new BABYLON.Vector3(-0.42, 1.55, 0.02),
   rightShoulderOffset: new BABYLON.Vector3(0.42, 1.55, 0.02),
@@ -470,13 +471,15 @@ function applyAvatarPose(parts, rootNode, pose) {
     );
 
     parts.headAnchor.position.copyFrom(localHeadPos);
-    parts.headAnchor.position.y += AVATAR_RIG.headAnchorYOffset;
+    parts.headAnchor.position.y += AVATAR_RIG.headAnchorYOffset + AVATAR_RIG.visualYOffset;
     parts.headAnchor.rotationQuaternion = quatFrom(pose.head.rot);
     parts.headAnchor.scaling.copyFrom(AVATAR_RIG.headVisualScale);
 
     if (parts.bodyAnchor && avatarMode === "desktop") {
       parts.bodyAnchor.position.y =
         parts.headAnchor.position.y + AVATAR_RIG.desktopBodyAnchorHeadOffset;
+    } else if (parts.bodyAnchor && avatarMode === "vr") {
+      parts.bodyAnchor.position.y += AVATAR_RIG.xrBodyAnchorYOffset;
     }
   }
 
