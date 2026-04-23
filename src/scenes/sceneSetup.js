@@ -18,6 +18,13 @@ export const DEFAULT_PLAYER_WIDTH = 0.6;
 
 export async function loadSceneModel(scene, fileName) {
   const result = await SceneLoader.ImportMeshAsync(null, "/scene-models/", fileName, scene);
+  for (const mesh of result.meshes) {
+    mesh.isPickable = true;
+    mesh.metadata = {
+      ...(mesh.metadata || {}),
+      isSceneCollider: true,
+    };
+  }
   console.log("Imported meshes:", result.meshes.map((m) => m.name));
   return result;
 }
@@ -56,6 +63,10 @@ export async function placeObjectModel(
 export function createStaticWall(scene, name, options, position) {
   const wall = MeshBuilder.CreateBox(name, options, scene);
   wall.position.copyFrom(position);
+  wall.metadata = {
+    ...(wall.metadata || {}),
+    isSceneCollider: true,
+  };
   wall.physicsImpostor = new PhysicsImpostor(
     wall,
     PhysicsImpostor.BoxImpostor,
@@ -117,6 +128,10 @@ export function createBaseScene(engine, options = {}) {
     scene
   );
   ground.position.y = 0;
+  ground.metadata = {
+    ...(ground.metadata || {}),
+    isSceneCollider: true,
+  };
   ground.physicsImpostor = new PhysicsImpostor(
     ground,
     PhysicsImpostor.BoxImpostor,

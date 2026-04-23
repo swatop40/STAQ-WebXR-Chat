@@ -120,6 +120,7 @@ const AVATAR_RIG = {
 // Voice chat variables
 let localStream = null;
 let micMode = "open";
+let pushToTalkPressed = false;
 let sceneVolume = 1;
 let playerVolume = 1;
 const peerConnections = new Map();
@@ -131,7 +132,7 @@ function clamp01(value) {
 
 function applyMicMode() {
   const tracks = localStream?.getAudioTracks?.() || [];
-  const enabled = micMode === "open";
+  const enabled = micMode === "open" || (micMode === "pushToTalk" && pushToTalkPressed);
 
   for (const track of tracks) {
     track.enabled = enabled;
@@ -154,6 +155,20 @@ function createVoiceControls() {
   return {
     getMicMode() {
       return micMode;
+    },
+    isPushToTalkPressed() {
+      return pushToTalkPressed;
+    },
+    setPushToTalkPressed(pressed) {
+      const nextPressed = !!pressed;
+      if (pushToTalkPressed === nextPressed) return pushToTalkPressed;
+
+      pushToTalkPressed = nextPressed;
+      if (micMode === "pushToTalk") {
+        applyMicMode();
+      }
+
+      return pushToTalkPressed;
     },
     cycleMicMode() {
       const modes = ["open", "muted", "pushToTalk"];

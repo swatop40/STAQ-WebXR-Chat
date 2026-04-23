@@ -185,6 +185,10 @@ export async function startScene(engine) {
     desktopKeys,
     playerHeight,
     playerSpawn,
+    dartGamePanelTransform: {
+      position: new Vector3(-5.49, 2.11, 10.99),
+      rotation: Vector3.Zero(),
+    },
   });
 
   await scene.whenReadyAsync();
