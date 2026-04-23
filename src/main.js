@@ -1067,6 +1067,7 @@ function createPeerConnection(targetId) {
     console.log("[VOICE] Proximity audio ready for:", targetId);
   };
 
+  
   pc.onconnectionstatechange = () => {
     console.log(`[VOICE] ${targetId} state:`, pc.connectionState);
 
