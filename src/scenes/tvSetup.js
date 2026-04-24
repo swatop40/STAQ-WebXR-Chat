@@ -2,6 +2,8 @@ import { Color3, Mesh, MeshBuilder, Quaternion, StandardMaterial, VideoTexture }
 import * as GUI from "babylonjs-gui";
 
 const TV_TRACKS_PER_PAGE = 4;
+const TV_AUDIO_RADIUS = 18;
+const TV_AUDIO_BASE_VOLUME = 1;
 const TV_KARAOKE_FALLBACK_TRACKS = [
   { title: "Add MP4 Files", url: null, artist: "Drop files into public/karaoke-songs" },
   { title: "Songs Auto-Load", url: null, artist: "TV reads filenames from /api/karaoke-songs" },
@@ -24,6 +26,48 @@ const DEFAULT_TV_OPTIONS = {
 
 function cloneTracks(tracks) {
   return tracks.map((track) => ({ ...track }));
+}
+
+function clamp01(value) {
+  return Math.min(1, Math.max(0, value));
+}
+
+function getTVListenerPosition(scene) {
+  const listener =
+    scene?.xrHelper?.baseExperience?.camera ||
+    scene?.activeCamera ||
+    scene?.playerMesh ||
+    null;
+
+  return listener?.globalPosition || listener?.position || null;
+}
+
+function getTVAudioFalloff(distance) {
+  if (!Number.isFinite(distance)) return 0;
+  if (distance <= 0) return 1;
+  if (distance >= TV_AUDIO_RADIUS) return 0;
+  return 1 - (distance / TV_AUDIO_RADIUS);
+}
+
+function updateTVAudioVolume(root) {
+  const video = root?.metadata?.tvVideoElement;
+  const scene = root?.getScene?.();
+  if (!video || !scene) return;
+
+  const listenerPosition = getTVListenerPosition(scene);
+  const sourcePosition =
+    root.metadata?.tvScreenMesh?.getAbsolutePosition?.() ||
+    root.getAbsolutePosition?.() ||
+    null;
+
+  if (!listenerPosition || !sourcePosition) {
+    video.volume = TV_AUDIO_BASE_VOLUME;
+    return;
+  }
+
+  const distance = listenerPosition.subtract(sourcePosition).length();
+  const falloff = getTVAudioFalloff(distance);
+  video.volume = clamp01(TV_AUDIO_BASE_VOLUME * falloff);
 }
 
 function applyScreenState(root, playerHost) {
@@ -126,7 +170,7 @@ function ensureTVVideoPlayer(root) {
   video.setAttribute("webkit-playsinline", "true");
   video.controls = false;
   video.loop = false;
-  video.volume = 1;
+  video.volume = TV_AUDIO_BASE_VOLUME;
 
   const texture = new VideoTexture(
     `${root.name}_videoTexture`,
@@ -170,6 +214,8 @@ function ensureTVVideoPlayer(root) {
     tvVideoElement: video,
     tvVideoTexture: texture,
   };
+
+  updateTVAudioVolume(root);
 
   return { video, texture };
 }
@@ -530,6 +576,10 @@ export function configureSceneTV(result, customOptions = {}) {
       applyScreenState(root, player.host);
     },
   };
+
+  root.getScene().onBeforeRenderObservable.add(() => {
+    updateTVAudioVolume(root);
+  });
 
   root.metadata.applyTVScreenState();
   loadTVTracks(root);
