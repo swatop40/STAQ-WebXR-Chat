@@ -14,7 +14,6 @@ import { createAvatarMirrorPanel } from "./avatarMirrorPanel.js";
 const TABLE_POSITION = new Vector3(1.23, 1.59, 8.87);
 const TABLE_ROTATION = new Vector3(0, Math.PI / 2, 0);
 const TABLE_TOP_Y = 1.76;
-const pictureSwapResults = new Map();
 const TEST_ROOM_OBJECTS = [
   {
     fileName: "table.glb",
@@ -155,13 +154,13 @@ const TEST_ROOM_OBJECTS = [
     interactable: false,
   },
   createSceneTVObject({
-    position: new Vector3(0.95, 4.66, 10.93),
+    position: new Vector3(0.95, 5.66, 10.93),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.95, 0.95, 0.95),
   }),
   {
     fileName: "andy-picture.glb",
-    position: new Vector3(-1.25, 2.17, 10.94),
+    position: new Vector3(-1.25, 3.17, 10.94),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.55, 0.55, 0.55),
     interactable: true,
@@ -173,8 +172,34 @@ const TEST_ROOM_OBJECTS = [
     },
   },
   {
+    fileName: "Quincy-Picture.glb",
+    position: new Vector3(0.22, 3.17, 10.94),
+    rotation: new Vector3(0, Math.PI / 2, 0),
+    scaling: new Vector3(0.55, 0.55, 0.55),
+    interactable: true,
+    interaction: {
+      activateOnSelect: true,
+    },
+    afterPlace: (result) => {
+      registerPictureSwapResult("Quincy-Picture.glb", result);
+    },
+  },
+  {
+    fileName: "Tyler-Picture.glb",
+    position: new Vector3(1.68, 3.17, 10.94),
+    rotation: new Vector3(0, Math.PI / 2, 0),
+    scaling: new Vector3(0.55, 0.55, 0.55),
+    interactable: true,
+    interaction: {
+      activateOnSelect: true,
+    },
+    afterPlace: (result) => {
+      registerPictureSwapResult("Tyler-Picture.glb", result);
+    },
+  },
+  {
     fileName: "sam-picture.glb",
-    position: new Vector3(3.15, 2.17, 10.94),
+    position: new Vector3(3.15, 3.17, 10.94),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.55, 0.55, 0.55),
     interactable: true,
@@ -235,18 +260,11 @@ function markDartInteractable(result) {
 }
 
 function registerPictureSwapResult(key, result) {
-  pictureSwapResults.set(key, result);
-  if (pictureSwapResults.size < 2) return;
-
-  const andyResult = pictureSwapResults.get("andy-picture.glb");
-  const samResult = pictureSwapResults.get("sam-picture.glb");
-  if (!andyResult || !samResult) return;
-
-  configurePictureSwap(andyResult, samResult);
-  configurePictureSwap(samResult, andyResult);
+  void key;
+  configurePictureSwap(result);
 }
 
-function configurePictureSwap(primaryResult, alternateResult) {
+function configurePictureSwap(primaryResult) {
   const primaryRoot = primaryResult.meshes[0];
   if (primaryRoot?.metadata?.pictureSwapConfigured) return;
   const primaryPictureMesh = findPictureSurfaceMesh(primaryResult);

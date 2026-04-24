@@ -127,10 +127,10 @@ const AVATAR_STYLE = {
 const AVATAR_FACE = {
   defaultExpression: "=D",
   talkMouth: "0",
-  panelSize: 0.44,
+  panelSize: 0.64,
   panelOffset: new BABYLON.Vector3(0, 0, 0.57),
   rotation: new BABYLON.Vector3(0, Math.PI, Math.PI / -2),
-  talkFrameMs: 240,
+  talkFrameMs: 180,
   speechOpenThreshold: 0.055,
   speechCloseThreshold: 0.035,
   speechOpenHoldMs: 120,
@@ -862,8 +862,6 @@ function ensureChestBadge(parts, rootId) {
   badgePlane.parent = parts.bodyAnchor;
   badgePlane.position.copyFrom(AVATAR_STYLE.chestBadgeOffset);
   badgePlane.isPickable = false;
-  badgePlane.renderingGroupId = 2;
-  badgePlane.alwaysSelectAsActiveMesh = true;
 
   const badgeTexture = new BABYLON.DynamicTexture(
     `${rootId}_chestBadgeTexture`,
@@ -883,7 +881,6 @@ function ensureChestBadge(parts, rootId) {
   badgeMaterial.backFaceCulling = false;
   badgeMaterial.useAlphaFromDiffuseTexture = true;
   badgeMaterial.emissiveColor = BABYLON.Color3.White();
-  badgeMaterial.zOffset = -2;
   badgePlane.material = badgeMaterial;
 
   parts.chestBadgePlane = badgePlane;
@@ -956,8 +953,6 @@ function ensureAvatarFace(parts, rootId) {
   facePlane.position.copyFrom(AVATAR_FACE.panelOffset);
   facePlane.rotation.copyFrom(AVATAR_FACE.rotation);
   facePlane.isPickable = false;
-  facePlane.renderingGroupId = 2;
-  facePlane.alwaysSelectAsActiveMesh = true;
 
   const faceTexture = new BABYLON.DynamicTexture(
     `${rootId}_faceTexture`,
@@ -977,7 +972,6 @@ function ensureAvatarFace(parts, rootId) {
   faceMaterial.specularColor = BABYLON.Color3.Black();
   faceMaterial.emissiveColor = BABYLON.Color3.White();
   faceMaterial.backFaceCulling = false;
-  faceMaterial.zOffset = -2;
   facePlane.material = faceMaterial;
 
   parts.facePlane = facePlane;
@@ -1279,6 +1273,8 @@ function applyAvatarTransform(rootNode, worldPos, scaleFactor = 1, avatarMode = 
     worldPos.y + AVATAR_RIG.rootOffset.y * scaleFactor,
     worldPos.z
   );
+  rootNode.rotationQuaternion = null;
+  rootNode.rotation.set(0, 0, 0);
   rootNode.scaling.copyFrom(scaleVector(AVATAR_RIG.avatarScale, scaleFactor));
   rootNode.metadata = rootNode.metadata || {};
   rootNode.metadata.avatarScaleFactor = scaleFactor;
@@ -1952,8 +1948,6 @@ socket.on("playersUpdate", async (players) => {
       p.avatarMode || "desktop"
     );
 
-    mesh.rotation.y = p.root?.rotY ?? 0;
-
     applyAvatarPose(mesh.metadata, mesh, {
       avatarMode: p.avatarMode || "desktop",
       rootRotY: p.root?.rotY ?? 0,
@@ -2163,14 +2157,29 @@ export async function launchApp(options = {}) {
       };
     }
 
+    const desktopForward = cam.getDirection(BABYLON.Axis.Z).normalize();
+    const desktopRight = cam.getDirection(BABYLON.Axis.X).normalize();
+    const desktopUp = cam.getDirection(BABYLON.Axis.Y).normalize();
+    const desktopHandBase = headWorld
+      .add(desktopUp.scale(-0.92))
+      .add(desktopForward.scale(-0.02));
+
     let leftHand = {
-      pos: { x: pos.x - 0.25, y: pos.y - 0.3, z: pos.z + 0.2 },
-      rot: { x: 0, y: 0, z: 0, w: 1 },
+      pos: {
+        x: desktopHandBase.x - desktopRight.x * 0.24,
+        y: desktopHandBase.y - desktopRight.y * 0.18,
+        z: desktopHandBase.z - desktopRight.z * 0.18,
+      },
+      rot: { ...headRot },
     };
 
     let rightHand = {
-      pos: { x: pos.x + 0.25, y: pos.y - 0.3, z: pos.z + 0.2 },
-      rot: { x: 0, y: 0, z: 0, w: 1 },
+      pos: {
+        x: desktopHandBase.x + desktopRight.x * 0.24,
+        y: desktopHandBase.y + desktopRight.y * 0.18,
+        z: desktopHandBase.z + desktopRight.z * 0.18,
+      },
+      rot: { ...headRot },
     };
 
     const xrHelper = scene.xrHelper || null;
