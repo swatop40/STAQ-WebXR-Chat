@@ -96,7 +96,7 @@ const AVATAR_RIG = {
   visualYOffset: -1.9,
   headAnchorYOffset: 0,
   desktopBodyAnchorHeadOffset: .2,
-  xrBodyAnchorYOffset: -0.5,
+  xrBodyAnchorYOffset: -1,
   handAnchorYOffset: 0.2,
   leftShoulderOffset: new BABYLON.Vector3(-0.42, 1.55, 0.02),
   rightShoulderOffset: new BABYLON.Vector3(0.42, 1.55, 0.02),
@@ -2208,6 +2208,38 @@ export async function launchApp(options = {}) {
       } else {
         if (handedness === "left") leftHand = tracked;
         if (handedness === "right") rightHand = tracked;
+      }
+    }
+
+    if (!xrActive) {
+      const desktopHeldObjectAnchor = scene.objectInteractionState?.desktopHold?.root
+        ? scene.objectInteractionState?.desktopHold?.anchor
+        : null;
+
+      if (desktopHeldObjectAnchor) {
+        const anchorMatrix = desktopHeldObjectAnchor.computeWorldMatrix(true);
+        const anchorScaling = new BABYLON.Vector3();
+        const anchorRotation = new BABYLON.Quaternion();
+        const anchorPosition = new BABYLON.Vector3();
+        anchorMatrix.decompose(anchorScaling, anchorRotation, anchorPosition);
+        const avatarHandPosition = anchorPosition
+          .add(desktopForward.scale(0.12))
+          .add(desktopUp.scale(-0.14))
+          .add(desktopRight.scale(0.18));
+
+        rightHand = {
+          pos: {
+            x: avatarHandPosition.x,
+            y: avatarHandPosition.y,
+            z: avatarHandPosition.z,
+          },
+          rot: {
+            x: anchorRotation.x,
+            y: anchorRotation.y,
+            z: anchorRotation.z,
+            w: anchorRotation.w,
+          },
+        };
       }
     }
 
