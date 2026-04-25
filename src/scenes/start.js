@@ -1,16 +1,18 @@
-import { PBRMaterial, Vector3 } from "babylonjs";
+import { Vector3 } from "babylonjs";
 import {
   createBaseScene,
   createMirror,
-  createStaticHierarchyCollider,
-  createStaticWall,
   loadSceneModel,
-  markSceneInteractable,
-  placeObjectModel,
+  placeSceneObjects,
 } from "./sceneSetup.js";
 import { setupSharedWebXR } from "./sharedWebXR.js";
 import { createSceneTVObject } from "./tvSetup.js";
 import { createAvatarMirrorPanel } from "./avatarMirrorPanel.js";
+import {
+  configureDartBoardTarget,
+  configurePictureReveal,
+  configureThrowableDart,
+} from "./sharedSceneFeatures.js";
 
 const TABLE_POSITION = new Vector3(1.23, 1.59, 8.87);
 const TABLE_ROTATION = new Vector3(0, Math.PI / 2, 0);
@@ -50,8 +52,7 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, -Math.PI / 2, 0),
     scaling: new Vector3(0.7, 0.7, 0.7),
     afterPlace: (result) => {
-      forceOpaqueDartBoardTexture(result);
-      markDartBoardTarget(result);
+      configureDartBoardTarget(result, { forceOpaqueTexture: true });
     },
   },
   {
@@ -60,7 +61,7 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      markDartInteractable(result);
+      configureThrowableDart(result);
     },
   },
   {
@@ -69,7 +70,7 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, 0, -Math.PI / 6),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      markDartInteractable(result);
+      configureThrowableDart(result);
     },
   },
   {
@@ -188,7 +189,7 @@ const TEST_ROOM_OBJECTS = [
       activateOnSelect: true,
     },
     afterPlace: (result) => {
-      registerPictureSwapResult("andy-picture.glb", result);
+      configurePictureReveal(result);
     },
   },
   {
@@ -201,7 +202,7 @@ const TEST_ROOM_OBJECTS = [
       activateOnSelect: true,
     },
     afterPlace: (result) => {
-      registerPictureSwapResult("Quincy-Picture.glb", result);
+      configurePictureReveal(result);
     },
   },
   {
@@ -214,7 +215,7 @@ const TEST_ROOM_OBJECTS = [
       activateOnSelect: true,
     },
     afterPlace: (result) => {
-      registerPictureSwapResult("Tyler-Picture.glb", result);
+      configurePictureReveal(result);
     },
   },
   {
@@ -227,7 +228,7 @@ const TEST_ROOM_OBJECTS = [
       activateOnSelect: true,
     },
     afterPlace: (result) => {
-      registerPictureSwapResult("sam-picture.glb", result);
+      configurePictureReveal(result);
     },
   },
   {
@@ -237,199 +238,6 @@ const TEST_ROOM_OBJECTS = [
     scaling: new Vector3(0.8, 0.8, 0.8),
   },
 ];
-
-async function addTestRoomProps(scene) {
-  for (const object of TEST_ROOM_OBJECTS) {
-    const result = await placeObjectModel(
-      scene,
-      object.fileName,
-      object.position,
-      object.rotation,
-      object.scaling
-    );
-
-    if (object.interactable) {
-      markSceneInteractable(result, object.fileName, object.interaction);
-    }
-
-    if (object.staticCollider) {
-      createStaticHierarchyCollider(
-        scene,
-        result.meshes[0],
-        object.staticCollider === true ? {} : object.staticCollider
-      );
-    }
-
-    object.afterPlace?.(result);
-  }
-}
-
-function markDartInteractable(result) {
-  const root = result.meshes[0];
-  if (!root) return;
-
-  const baseLocalScaling = root.scaling.clone();
-  root.metadata = {
-    ...(root.metadata || {}),
-    isThrowableDart: true,
-    dartRoot: root,
-    baseLocalScaling,
-  };
-
-  for (const mesh of result.meshes) {
-    mesh.isPickable = true;
-    mesh.metadata = {
-      ...(mesh.metadata || {}),
-      isThrowableDart: true,
-      dartRoot: root,
-      baseLocalScaling: baseLocalScaling.clone(),
-    };
-  }
-}
-
-function registerPictureSwapResult(key, result) {
-  void key;
-  configurePictureSwap(result);
-}
-
-function registerSharedStateReady(scene, callback) {
-  if (!scene || typeof callback !== "function") return;
-
-  if (scene.sharedStateControls) {
-    callback(scene.sharedStateControls);
-    return;
-  }
-
-  if (!scene._sharedStateReadyCallbacks) {
-    scene._sharedStateReadyCallbacks = [];
-  }
-
-  scene._sharedStateReadyCallbacks.push(callback);
-}
-
-function configurePictureSwap(primaryResult) {
-  const primaryRoot = primaryResult.meshes[0];
-  if (primaryRoot?.metadata?.pictureSwapConfigured) return;
-  const primaryPictureMesh = findPictureSurfaceMesh(primaryResult);
-  if (!primaryRoot || !primaryPictureMesh) return;
-
-  const scene = primaryRoot.getScene();
-  const pictureStateKey = primaryRoot.name;
-  let applyingRemoteState = false;
-
-  const applyPictureVisibility = (visible, shouldBroadcast = true) => {
-    primaryPictureMesh.setEnabled(visible);
-    if (shouldBroadcast && !applyingRemoteState) {
-      scene.sharedStateControls?.emit("picture", pictureStateKey, { visible });
-    }
-  };
-
-  primaryRoot.metadata = {
-    ...(primaryRoot.metadata || {}),
-    activateOnSelect: true,
-    pictureSwapConfigured: true,
-    onActivate: () => {
-      applyPictureVisibility(!primaryPictureMesh.isEnabled(), true);
-    },
-  };
-
-  for (const mesh of primaryResult.meshes) {
-    mesh.isPickable = true;
-    mesh.metadata = {
-      ...(mesh.metadata || {}),
-      activateOnSelect: true,
-      onActivate: primaryRoot.metadata.onActivate,
-      interactableRoot: primaryRoot,
-    };
-  }
-
-  registerSharedStateReady(scene, (controls) => {
-    controls.subscribe("picture", pictureStateKey, (state) => {
-      if (typeof state?.visible !== "boolean") return;
-      applyingRemoteState = true;
-      applyPictureVisibility(state.visible, false);
-      applyingRemoteState = false;
-    });
-  });
-}
-
-function findPictureSurfaceMesh(result) {
-  return result.meshes.find((mesh) => mesh.material?.name?.toLowerCase?.().includes("-prof")) || null;
-}
-
-function markDartBoardTarget(result) {
-  const root = result.meshes[0];
-  if (!root) return;
-
-  root.metadata = {
-    ...(root.metadata || {}),
-    isDartBoardTarget: true,
-    dartBoardRoot: root,
-  };
-
-  for (const mesh of result.meshes) {
-    mesh.isPickable = true;
-    mesh.metadata = {
-      ...(mesh.metadata || {}),
-      isDartBoardTarget: true,
-      dartBoardRoot: root,
-    };
-  }
-}
-
-function forceOpaqueDartBoardTexture(result) {
-  const materials = new Set(
-    result.meshes
-      .map((mesh) => mesh.material)
-      .filter(Boolean)
-  );
-
-  for (const material of materials) {
-    material.alpha = 1;
-    material.backFaceCulling = false;
-
-    if ("transparencyMode" in material) {
-      material.transparencyMode = PBRMaterial.PBRMATERIAL_OPAQUE;
-    }
-
-    if ("useAlphaFromAlbedoTexture" in material) {
-      material.useAlphaFromAlbedoTexture = false;
-    }
-
-    for (const texture of [material.albedoTexture, material.diffuseTexture]) {
-      if (!texture) continue;
-      texture.hasAlpha = false;
-      texture.getAlphaFromRGB = false;
-    }
-  }
-}
-
-function addTestRoomCollision(scene) {
-  const wallHeight = 2;
-  const wallLength = 6;
-  const wallThickness = 0.2;
-
-  createStaticWall(
-    scene,
-    "backWall",
-    { width: wallLength, height: wallHeight, depth: wallThickness },
-    new Vector3(0, wallHeight / 2, wallLength / 2)
-  );
-
-  createStaticWall(
-    scene,
-    "leftWall",
-    { width: wallThickness, height: wallHeight, depth: wallLength },
-    new Vector3(-wallLength / 2, wallHeight / 2, 0)
-  );
-
-  createStaticWall(
-    scene,
-    "rightWall",
-    { width: wallThickness, height: wallHeight, depth: wallLength },
-    new Vector3(wallLength / 2, wallHeight / 2, 0)
-  );
-}
 
 export async function startScene(engine) {
   const {
@@ -446,7 +254,7 @@ export async function startScene(engine) {
   for (const mesh of roomResult.meshes) {
     mesh.checkCollisions = false;
   }
-  await addTestRoomProps(scene);
+  await placeSceneObjects(scene, TEST_ROOM_OBJECTS);
 
   await setupSharedWebXR(scene, {
     ground,

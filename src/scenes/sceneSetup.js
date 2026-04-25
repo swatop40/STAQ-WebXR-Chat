@@ -88,6 +88,37 @@ export async function placeObjectModel(
   return result;
 }
 
+export async function placeSceneObjects(scene, objects = []) {
+  const placedResults = [];
+
+  for (const object of objects) {
+    const result = await placeObjectModel(
+      scene,
+      object.fileName,
+      object.position,
+      object.rotation,
+      object.scaling
+    );
+
+    if (object.interactable) {
+      markSceneInteractable(result, object.fileName, object.interaction);
+    }
+
+    if (object.staticCollider) {
+      createStaticHierarchyCollider(
+        scene,
+        result.meshes[0],
+        object.staticCollider === true ? {} : object.staticCollider
+      );
+    }
+
+    object.afterPlace?.(result, { scene, object });
+    placedResults.push({ object, result });
+  }
+
+  return placedResults;
+}
+
 export function createStaticHierarchyCollider(scene, root, options = {}) {
   if (!scene || !root) return null;
   if (root.metadata?.staticCollider) return root.metadata.staticCollider;
