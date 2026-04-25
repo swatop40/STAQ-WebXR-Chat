@@ -2112,8 +2112,8 @@ socket.on("init", async ({ selfId: id, players, chatMessages, sceneState }) => {
   if (!sceneRef) return;
 
   const otherPlayers = Object.values(players || {}).filter(
-    (p) => p?.id && p.id !== selfId
-  );
+  (p) => p && p.id && p.id !== selfId
+);
 
   await Promise.all(otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id)));
   logConnectedPlayers("after init");
@@ -2170,6 +2170,8 @@ socket.on("playerLeft", (id) => {
 socket.on("playersUpdate", async (players) => {
   if (!sceneRef || !players) return;
 
+  const activeIds = new Set(Object.keys(players));
+
   for (const [id, p] of Object.entries(players)) {
     if (id === selfId) continue;
 
@@ -2181,6 +2183,7 @@ socket.on("playersUpdate", async (players) => {
     }
 
     ensureRemoteNameLabel(id, mesh, p.name || "Player");
+
     applyAvatarAppearance(
       mesh.metadata,
       p.name || "Player",
@@ -2209,6 +2212,13 @@ socket.on("playersUpdate", async (players) => {
     });
 
     updateRemoteAudioVolume(id);
+  }
+
+  for (const [id, mesh] of remoteMeshes.entries()) {
+    if (!activeIds.has(id)) {
+      mesh.dispose?.();
+      remoteMeshes.delete(id);
+    }
   }
 });
 
