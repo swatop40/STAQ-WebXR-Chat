@@ -195,6 +195,35 @@ function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
+  
+  socket.join("lobby");
+  socket.currentRoom = "lobby";
+
+  socket.on("joinScene", (sceneId) => {
+  const player = players.get(socket.id);
+  if (!player) return;
+
+  const prevRoom = socket.currentRoom || "lobby";
+
+    socket.leave(prevRoom);
+
+    socket.join(sceneId);
+    socket.currentRoom = sceneId;
+    player.room = sceneId;
+
+    const roomPlayers = Object.fromEntries(
+      [...players.entries()].filter(([_, p]) => p.room === sceneId)
+    );
+
+    socket.emit("init", {
+      selfId: socket.id,
+      players: roomPlayers,
+      chatMessages,
+      sceneState,
+    });
+
+    socket.to(sceneId).emit("playerJoined", player);
+  });
 
   players.set(socket.id, {
   id: socket.id,
@@ -229,7 +258,7 @@ io.on("connection", (socket) => {
     sceneState,
   });
 
-  socket.broadcast.emit("playerJoined", players.get(socket.id));
+  socket.to(socket.currentRoom).emit("playerJoined", players.get(socket.id));
 
   socket.on("pose", (data) => {
   const p = players.get(socket.id);
@@ -348,7 +377,7 @@ io.on("connection", (socket) => {
       chatMessages.shift();
     }
 
-    io.emit("chat-message", message);
+    io.to(player.room).emit("chat-message", message);
   });
 
   socket.on("scene-state-update", (payload, ack) => {
@@ -360,7 +389,8 @@ io.on("connection", (socket) => {
 
     const nextState = applySceneStateUpdate(update, socket.id);
     maybeBroadcastTVDebugMessage(socket.id, update, nextState);
-    io.emit("scene-state-update", {
+    const player = players.get(socket.id);
+    io.to(player.room).emit("scene-state-update", {
       scope: update.scope,
       key: update.key,
       state: nextState,
@@ -420,13 +450,24 @@ io.on("connection", (socket) => {
     if (players.size === 0) {
       resetSharedRoomState();
     }
-    io.emit("playerLeft", socket.id);
+    const room = socket.currentRoom;
+    if (room) {
+     io.to(room).emit("playerLeft", socket.id);
+    }
   });
 });
 
 const TICK_HZ = 15;
 setInterval(() => {
-  io.emit("playersUpdate", Object.fromEntries(players));
+  const rooms = new Set([...players.values()].map(p => p.room));
+
+  for (const room of rooms) {
+    const roomPlayers = Object.fromEntries(
+      [...players.entries()].filter(([_, p]) => p.room === room)
+    );
+
+    io.to(room).emit("playersUpdate", roomPlayers);
+  }
 }, 1000 / TICK_HZ);
 
 const PORT = 3000;

@@ -2359,6 +2359,7 @@ export async function launchApp(options = {}) {
   await ensureLocalAvatar(scene);
 
   socket.connect();
+  socket.emit("joinScene", options.sceneId || "start");
 
   if (shouldShowDebugLayer()) {
     scene.debugLayer.show();

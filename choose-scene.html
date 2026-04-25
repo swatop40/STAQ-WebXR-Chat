@@ -121,8 +121,9 @@
           overlay.style.display = "none";
 
           await launchApp({
-            playerName: sessionStorage.getItem("nameInput") || "Player",
-          });
+              playerName: sessionStorage.getItem("nameInput") || "Player",
+              sceneId: sceneKey,
+            });
         });
       });
     </script>
