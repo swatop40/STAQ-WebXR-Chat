@@ -15,6 +15,8 @@ const io = new Server(httpServer, {
 });
 
 const players = new Map();
+const chatMessages = [];
+const MAX_CHAT_MESSAGES = 40;
 const karaokeSongsDir = path.resolve(process.cwd(), "public", "karaoke-songs");
 const supportedKaraokeExtensions = new Set([".mp4", ".webm", ".mov", ".m4v"]);
 
@@ -52,6 +54,13 @@ function makeSpawn() {
   return { x: (Math.random() - 0.5) * 2, y: 1.6, z: (Math.random() - 0.5) * 2 };
 }
 
+function sanitizeChatText(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+}
+
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
@@ -83,6 +92,7 @@ io.on("connection", (socket) => {
   socket.emit("init", {
     selfId: socket.id,
     players: Object.fromEntries(players),
+    chatMessages,
   });
 
   socket.broadcast.emit("playerJoined", players.get(socket.id));
@@ -181,6 +191,27 @@ io.on("connection", (socket) => {
     };
   }
 });
+
+  socket.on("chat-message", ({ text }) => {
+    const player = players.get(socket.id);
+    const cleanText = sanitizeChatText(text);
+    if (!player || !cleanText) return;
+
+    const message = {
+      id: `${Date.now()}-${socket.id}`,
+      senderId: socket.id,
+      senderName: player.name || "Player",
+      text: cleanText,
+      createdAt: Date.now(),
+    };
+
+    chatMessages.push(message);
+    while (chatMessages.length > MAX_CHAT_MESSAGES) {
+      chatMessages.shift();
+    }
+
+    io.emit("chat-message", message);
+  });
 
 //WEBRTC SIGNALING
 

@@ -53,6 +53,7 @@ function updateTVAudioVolume(root) {
   const video = root?.metadata?.tvVideoElement;
   const scene = root?.getScene?.();
   if (!video || !scene) return;
+  const sceneVolume = scene.audioControls?.getSceneVolume?.() ?? 1;
 
   const listenerPosition = getTVListenerPosition(scene);
   const sourcePosition =
@@ -61,13 +62,13 @@ function updateTVAudioVolume(root) {
     null;
 
   if (!listenerPosition || !sourcePosition) {
-    video.volume = TV_AUDIO_BASE_VOLUME;
+    video.volume = clamp01(TV_AUDIO_BASE_VOLUME * sceneVolume);
     return;
   }
 
   const distance = listenerPosition.subtract(sourcePosition).length();
   const falloff = getTVAudioFalloff(distance);
-  video.volume = clamp01(TV_AUDIO_BASE_VOLUME * falloff);
+  video.volume = clamp01(TV_AUDIO_BASE_VOLUME * sceneVolume * falloff);
 }
 
 function applyScreenState(root, playerHost) {

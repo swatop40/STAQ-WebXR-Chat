@@ -230,6 +230,7 @@ let micMode = "open";
 let pushToTalkPressed = false;
 let sceneVolume = 1;
 let playerVolume = 1;
+const MAX_CHAT_MESSAGES = 40;
 const VOICE_RADIUS = 12;
 let vrAvatarHeightOverride = null;
 const peerConnections = new Map();
@@ -237,6 +238,7 @@ const remoteAudioEls = new Map();
 const remotePlayerNames = new Map();
 const mutedRemoteIds = new Set();
 let localVoiceAnalyser = null;
+const serverChatMessages = [];
 
 function logConnectedPlayers(context, playersLike = null) {
   const ids = playersLike
@@ -384,7 +386,7 @@ function updateRemoteAudioVolume(playerId) {
   const listenerPos = listenerCamera.globalPosition || listenerCamera.position;
   const distance = BABYLON.Vector3.Distance(listenerPos, voicePosition);
   const falloff = getVoiceFalloff(distance);
-  audioEl.volume = clamp01(sceneVolume * playerVolume * falloff);
+  audioEl.volume = clamp01(playerVolume * falloff);
 }
 
 function updateAllRemoteAudioVolumes() {
@@ -458,6 +460,30 @@ function getPercentLabel(value) {
   return `${Math.round(value * 100)}%`;
 }
 
+function addServerChatMessage(message) {
+  if (!message?.id || !message?.text) return;
+  if (serverChatMessages.some((entry) => entry.id === message.id)) return;
+
+  serverChatMessages.push({
+    id: message.id,
+    senderId: message.senderId || "",
+    senderName: message.senderName || "Player",
+    text: String(message.text || ""),
+    createdAt: Number.isFinite(message.createdAt) ? message.createdAt : Date.now(),
+  });
+
+  while (serverChatMessages.length > MAX_CHAT_MESSAGES) {
+    serverChatMessages.shift();
+  }
+}
+
+function replaceServerChatMessages(messages) {
+  serverChatMessages.length = 0;
+  for (const message of messages || []) {
+    addServerChatMessage(message);
+  }
+}
+
 function createVoiceControls() {
   return {
     getMicMode() {
@@ -494,6 +520,12 @@ function createAudioControls() {
         scene: `Scene Vol: ${getPercentLabel(sceneVolume)}`,
         players: `Player Vol: ${getPercentLabel(playerVolume)}`,
       };
+    },
+    getSceneVolume() {
+      return sceneVolume;
+    },
+    getPlayerVolume() {
+      return playerVolume;
     },
     adjustSceneVolume(delta) {
       sceneVolume = clamp01(sceneVolume + delta);
@@ -532,6 +564,21 @@ function createAudioControls() {
 
       console.log(`[AUDIO] ${nextMuted ? "Muted" : "Unmuted"} ${remotePlayerNames.get(id) || id}`);
       return nextMuted;
+    },
+  };
+}
+
+function createChatControls() {
+  return {
+    getMessages() {
+      return serverChatMessages.map((message) => ({ ...message }));
+    },
+    sendMessage(text) {
+      const cleanText = String(text || "").replace(/\s+/g, " ").trim().slice(0, 240);
+      if (!cleanText || !socket.connected) return false;
+
+      socket.emit("chat-message", { text: cleanText });
+      return true;
     },
   };
 }
@@ -1865,10 +1912,11 @@ function createPeerConnection(targetId) {
   return pc;
 }
 
-socket.on("init", async ({ selfId: id, players }) => {
+socket.on("init", async ({ selfId: id, players, chatMessages }) => {
   selfId = id;
   console.log("[NET] init selfId:", selfId);
   logConnectedPlayers("init", players);
+  replaceServerChatMessages(chatMessages);
 
   if (!sceneRef) return;
 
@@ -1878,6 +1926,10 @@ socket.on("init", async ({ selfId: id, players }) => {
 
   await Promise.all(otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id)));
   logConnectedPlayers("after init");
+});
+
+socket.on("chat-message", (message) => {
+  addServerChatMessage(message);
 });
 
 socket.on("playerJoined", async (p) => {
@@ -2094,6 +2146,7 @@ export async function launchApp(options = {}) {
   sceneRef = scene;
   scene.voiceControls = createVoiceControls();
   scene.audioControls = createAudioControls();
+  scene.chatControls = createChatControls();
   scene.avatarControls = createAvatarControls();
   uiTexture = GUI.AdvancedDynamicTexture.CreateFullscreenUI("nameUI", true, scene);
   applySceneVolume();
@@ -2212,19 +2265,21 @@ export async function launchApp(options = {}) {
     }
 
     if (!xrActive) {
-      const desktopHeldObjectAnchor = scene.objectInteractionState?.desktopHold?.root
-        ? scene.objectInteractionState?.desktopHold?.anchor
-        : null;
+      const desktopHeldAnchor = scene.dartInteractionState?.desktopHold?.root
+        ? scene.dartInteractionState?.desktopHold?.anchor
+        : (scene.objectInteractionState?.desktopHold?.root
+          ? scene.objectInteractionState?.desktopHold?.anchor
+          : null);
 
-      if (desktopHeldObjectAnchor) {
-        const anchorMatrix = desktopHeldObjectAnchor.computeWorldMatrix(true);
+      if (desktopHeldAnchor) {
+        const anchorMatrix = desktopHeldAnchor.computeWorldMatrix(true);
         const anchorScaling = new BABYLON.Vector3();
         const anchorRotation = new BABYLON.Quaternion();
         const anchorPosition = new BABYLON.Vector3();
         anchorMatrix.decompose(anchorScaling, anchorRotation, anchorPosition);
         const avatarHandPosition = anchorPosition
           .add(desktopForward.scale(0.12))
-          .add(desktopUp.scale(-0.14))
+          .add(desktopUp.scale(-0.42))
           .add(desktopRight.scale(0.18));
 
         rightHand = {

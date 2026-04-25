@@ -2,6 +2,7 @@ import { PBRMaterial, Vector3 } from "babylonjs";
 import {
   createBaseScene,
   createMirror,
+  createStaticHierarchyCollider,
   createStaticWall,
   loadSceneModel,
   markSceneInteractable,
@@ -20,18 +21,28 @@ const TEST_ROOM_OBJECTS = [
     position: TABLE_POSITION,
     rotation: TABLE_ROTATION,
     scaling: new Vector3(1, 1, 1),
+    staticCollider: {
+      padding: new Vector3(0.18, 0.08, 0.18),
+      centerOffset: new Vector3(0, -0.02, 0),
+    },
   },
   {
     fileName: "chair.glb",
     position: new Vector3(3.2, 0.68, 8.75),
     rotation: Vector3.Zero(),
     scaling: new Vector3(0.5, 0.5, 0.5),
+    staticCollider: {
+      padding: new Vector3(0.1, 0.08, 0.1),
+    },
   },
   {
     fileName: "chair.glb",
     position: new Vector3(-0.61, 0.68, 8.75),
     rotation: new Vector3(0, Math.PI, 0),
     scaling: new Vector3(0.5, 0.5, 0.5),
+    staticCollider: {
+      padding: new Vector3(0.1, 0.08, 0.1),
+    },
   },
   {
     fileName: "dart-target.glb",
@@ -138,6 +149,9 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI, 0),
     scaling: new Vector3(0.32, 0.32, 0.32),
     interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
   },
   {
     fileName: "mic-stand.glb",
@@ -145,6 +159,9 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, -Math.PI / 2.7, 0),
     scaling: new Vector3(0.13, 0.13, 0.13),
     interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.08, 0.14, 0.08),
+    },
   },
   {
     fileName: "microphone-and-stand.glb",
@@ -152,6 +169,9 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 2.8, 0),
     scaling: new Vector3(0.12, 0.12, 0.12),
     interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.08, 0.14, 0.08),
+    },
   },
   createSceneTVObject({
     position: new Vector3(0.95, 5.66, 10.93),
@@ -230,6 +250,14 @@ async function addTestRoomProps(scene) {
 
     if (object.interactable) {
       markSceneInteractable(result, object.fileName, object.interaction);
+    }
+
+    if (object.staticCollider) {
+      createStaticHierarchyCollider(
+        scene,
+        result.meshes[0],
+        object.staticCollider === true ? {} : object.staticCollider
+      );
     }
 
     object.afterPlace?.(result);
