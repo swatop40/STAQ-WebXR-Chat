@@ -25,6 +25,14 @@ const sceneState = {
   tv: {},
   picture: {},
 };
+
+const SCENE_CAPACITY = {
+  start: 3,
+  bar: 3,
+  parking: 3,
+};
+
+
 const tvDebugPlaybackByKey = new Map();
 const karaokeSongsDir = path.resolve(process.cwd(), "public", "karaoke-songs");
 const supportedKaraokeExtensions = new Set([".mp4", ".webm", ".mov", ".m4v"]);
@@ -162,6 +170,27 @@ function resetSharedRoomState() {
   tvDebugPlaybackByKey.clear();
 }
 
+function getSceneCounts() {
+  const counts = {
+    start: 0,
+    bar: 0,
+    parking: 0,
+  };
+
+  for (const player of players.values()) {
+    const room = player.room;
+    if (counts[room] !== undefined) {
+      counts[room]++;
+    }
+  }
+
+  return counts;
+}
+
+function broadcastSceneCounts() {
+  io.emit("sceneCounts", getSceneCounts());
+}
+
 function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
   if (update?.scope !== "tv" || !update.key || !nextState) return;
 
@@ -199,32 +228,6 @@ io.on("connection", (socket) => {
   socket.join("lobby");
   socket.currentRoom = "lobby";
 
-  socket.on("joinScene", (sceneId) => {
-  const player = players.get(socket.id);
-  if (!player) return;
-
-  const prevRoom = socket.currentRoom || "lobby";
-
-    socket.leave(prevRoom);
-
-    socket.join(sceneId);
-    socket.currentRoom = sceneId;
-    player.room = sceneId;
-
-    const roomPlayers = Object.fromEntries(
-      [...players.entries()].filter(([_, p]) => p.room === sceneId)
-    );
-
-    socket.emit("init", {
-      selfId: socket.id,
-      players: roomPlayers,
-      chatMessages,
-      sceneState,
-    });
-
-    socket.to(sceneId).emit("playerJoined", player);
-  });
-
   players.set(socket.id, {
   id: socket.id,
   name: "Player",
@@ -251,12 +254,41 @@ io.on("connection", (socket) => {
   },
 });
 
-  socket.emit("init", {
-    selfId: socket.id,
-    players: Object.fromEntries(players),
-    chatMessages,
-    sceneState,
-  });
+  socket.on("joinScene", (sceneId) => {
+      const player = players.get(socket.id);
+      if (!player) return;
+
+      const counts = getSceneCounts();
+      const max = SCENE_CAPACITY[sceneId] || 9999;
+
+      
+
+      if ((counts[sceneId] || 0) >= max) {
+        socket.emit("sceneFull", { sceneId, max });
+        return;
+      }
+
+      const prevRoom = socket.currentRoom || "lobby";
+      socket.leave(prevRoom);
+
+      socket.join(sceneId);
+      socket.currentRoom = sceneId;
+      player.room = sceneId;
+
+      const roomPlayers = Object.fromEntries(
+        [...players.entries()].filter(([_, p]) => p.room === sceneId)
+      );
+
+      socket.emit("init", {
+        selfId: socket.id,
+        players: roomPlayers,
+        chatMessages,
+        sceneState,
+      });
+
+      socket.to(sceneId).emit("playerJoined", player);
+      broadcastSceneCounts();
+    });
 
   socket.to(socket.currentRoom).emit("playerJoined", players.get(socket.id));
 
@@ -453,6 +485,8 @@ io.on("connection", (socket) => {
     const room = socket.currentRoom;
     if (room) {
      io.to(room).emit("playerLeft", socket.id);
+
+     broadcastSceneCounts();
     }
   });
 });

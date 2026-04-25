@@ -2605,6 +2605,9 @@ async function handleJoin() {
   joinOverlay.style.display = "none";
 
   await unlockAudio();
+
+
+
   await launchApp();
 }
 
