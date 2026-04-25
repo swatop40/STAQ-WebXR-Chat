@@ -24,12 +24,37 @@ const DEFAULT_TV_OPTIONS = {
   panelSize: { width: 2.05, height: 1.16 },
 };
 
+function registerSharedStateReady(scene, callback) {
+  if (!scene || typeof callback !== "function") return;
+
+  if (scene.sharedStateControls) {
+    callback(scene.sharedStateControls);
+    return;
+  }
+
+  if (!scene._sharedStateReadyCallbacks) {
+    scene._sharedStateReadyCallbacks = [];
+  }
+
+  scene._sharedStateReadyCallbacks.push(callback);
+}
+
 function cloneTracks(tracks) {
   return tracks.map((track) => ({ ...track }));
 }
 
 function clamp01(value) {
   return Math.min(1, Math.max(0, value));
+}
+
+function getResolvedMediaUrl(url) {
+  if (!url) return null;
+
+  try {
+    return new URL(url, window.location.href).href;
+  } catch {
+    return url;
+  }
 }
 
 function getTVListenerPosition(scene) {
@@ -224,6 +249,7 @@ function ensureTVVideoPlayer(root) {
 function playTVTrack(root, track, statusText) {
   const state = root.metadata?.tvPlayerState;
   if (!state) return;
+  claimTVControl(root);
 
   state.currentTrack = track;
 
@@ -231,11 +257,14 @@ function playTVTrack(root, track, statusText) {
     state.playPauseButton.textBlock.text = "Play";
     statusText.text = `${track?.title || "No file"}\nAdd a real MP4 path`;
     root.metadata?.applyTVScreenState?.();
+    root.metadata?.emitTVState?.();
     return;
   }
 
   const { video } = ensureTVVideoPlayer(root);
-  if (video.src !== track.url) {
+  const resolvedTrackUrl = getResolvedMediaUrl(track.url);
+  const currentVideoUrl = getResolvedMediaUrl(video.currentSrc || video.src);
+  if (currentVideoUrl !== resolvedTrackUrl) {
     video.src = track.url;
   }
 
@@ -248,38 +277,65 @@ function playTVTrack(root, track, statusText) {
     playPromise
       .then(() => {
         statusText.text = `${track.title}\nNow Playing`;
+        root.metadata?.emitTVDebugPlayback?.(track, "play");
       })
       .catch((error) => {
+        if (error?.name === "AbortError") {
+          return;
+        }
         console.warn("[TV] Failed to play track", error);
         state.playPauseButton.textBlock.text = "Play";
         statusText.text = `Couldn't play\n${track.title}`;
         root.metadata?.applyTVScreenState?.();
+        root.metadata?.emitTVState?.();
       });
   } else {
     statusText.text = `${track.title}\nNow Playing`;
+    root.metadata?.emitTVDebugPlayback?.(track, "play");
   }
+
+  root.metadata?.emitTVState?.();
 }
 
 function toggleTVPlayback(root, state) {
   const { video } = ensureTVVideoPlayer(root);
   if (!state.currentTrack?.url) {
     state.statusText.text = "Pick a song first";
+    root.metadata?.emitTVState?.();
     return;
   }
 
+  claimTVControl(root);
+
   if (video.paused) {
+    const sharedTVState =
+      root.getScene()?.sharedStateControls?.getState("tv", root.name) ||
+      root.metadata?.tvLatestSharedState ||
+      null;
+
+    if (Number.isFinite(sharedTVState?.currentTime)) {
+      try {
+        video.currentTime = Math.max(sharedTVState.currentTime, 0);
+      } catch {}
+    }
+
     const playPromise = video.play();
     state.playPauseButton.textBlock.text = "Pause";
     if (playPromise?.catch) {
       playPromise.catch((error) => {
+        if (error?.name === "AbortError") {
+          return;
+        }
         console.warn("[TV] Failed to resume track", error);
         state.playPauseButton.textBlock.text = "Play";
         state.statusText.text = `Couldn't resume\n${state.currentTrack.title}`;
         root.metadata?.applyTVScreenState?.();
+        root.metadata?.emitTVState?.();
       });
     }
     state.statusText.text = `${state.currentTrack.title}\nNow Playing`;
     root.metadata?.applyTVScreenState?.();
+    root.metadata?.emitTVState?.();
     return;
   }
 
@@ -287,9 +343,11 @@ function toggleTVPlayback(root, state) {
   state.playPauseButton.textBlock.text = "Play";
   state.statusText.text = `${state.currentTrack.title}\nPaused`;
   root.metadata?.applyTVScreenState?.();
+  root.metadata?.emitTVState?.();
 }
 
 function stopTVPlayback(root, state) {
+  claimTVControl(root);
   const { video } = ensureTVVideoPlayer(root);
   video.pause();
   video.currentTime = 0;
@@ -298,6 +356,7 @@ function stopTVPlayback(root, state) {
     ? `${state.currentTrack.title}\nStopped`
     : "Stopped";
   root.metadata?.applyTVScreenState?.();
+  root.metadata?.emitTVState?.();
 }
 
 function createTVPlayerPanel(root, options) {
@@ -478,13 +537,17 @@ function createTVPlayerPanel(root, options) {
   state.refreshTrackList = refreshTrackList;
 
   previousButton.onPointerUpObservable.add(() => {
+    claimTVControl(root);
     state.pageIndex -= 1;
     refreshTrackList();
+    root.metadata?.emitTVState?.(true);
   });
 
   nextButton.onPointerUpObservable.add(() => {
+    claimTVControl(root);
     state.pageIndex += 1;
     refreshTrackList();
+    root.metadata?.emitTVState?.(true);
   });
 
   playPauseButton.onPointerUpObservable.add(() => {
@@ -496,8 +559,10 @@ function createTVPlayerPanel(root, options) {
   });
 
   closeButton.onPointerUpObservable.add(() => {
+    claimTVControl(root);
     playerHost.setEnabled(false);
     root.metadata?.applyTVScreenState?.();
+    root.metadata?.emitTVState?.(true);
   });
 
   refreshTrackList();
@@ -507,6 +572,22 @@ function createTVPlayerPanel(root, options) {
     texture: playerTexture,
     state,
   };
+}
+
+function getTVSelfId(root) {
+  return root.getScene()?.sharedStateControls?.getSelfId?.() || null;
+}
+
+function claimTVControl(root) {
+  const selfId = getTVSelfId(root);
+  if (!selfId) return null;
+
+  root.metadata = {
+    ...(root.metadata || {}),
+    tvControllerId: selfId,
+  };
+
+  return selfId;
 }
 
 export function configureSceneTV(result, customOptions = {}) {
@@ -563,6 +644,130 @@ export function configureSceneTV(result, customOptions = {}) {
       mesh.isPickable = isPickable;
     }
   };
+  const tvStateKey = root.name;
+  let applyingRemoteTVState = false;
+  let lastTVSyncAt = 0;
+
+  const getCurrentTVSharedState = () => {
+    const state = root.metadata?.tvPlayerState;
+    const video = root.metadata?.tvVideoElement;
+    const host = root.metadata?.tvPlayerHost;
+    return {
+      controllerId: root.metadata?.tvControllerId || getTVSelfId(root),
+      panelVisible: !!host?.isEnabled(),
+      pageIndex: state?.pageIndex ?? 0,
+      currentTrack: state?.currentTrack
+        ? {
+            title: state.currentTrack.title || "",
+            url: state.currentTrack.url || null,
+            artist: state.currentTrack.artist || "",
+          }
+        : null,
+      paused: video ? !!video.paused : true,
+      currentTime: video ? video.currentTime || 0 : 0,
+    };
+  };
+
+  const emitTVState = (force = false) => {
+    if (applyingRemoteTVState) return;
+
+    const selfId = getTVSelfId(root);
+    const controllerId =
+      root.metadata?.tvControllerId ||
+      root.getScene()?.sharedStateControls?.getState("tv", tvStateKey)?.controllerId ||
+      null;
+    if (!force && selfId && controllerId && controllerId !== selfId) {
+      return;
+    }
+
+    const now = performance.now();
+    if (!force && now - lastTVSyncAt < 250) return;
+    lastTVSyncAt = now;
+    const nextState = getCurrentTVSharedState();
+    root.getScene()?.sharedStateControls?.emit("tv", tvStateKey, nextState);
+  };
+
+  const emitTVDebugPlayback = (track, action = "play") => {
+    if (!track?.url) return;
+
+    root.getScene()?.sharedStateControls?.debugTVPlayback?.(tvStateKey, {
+      title: track.title || "Unknown Song",
+      url: track.url || null,
+      action,
+    });
+  };
+
+  const applyRemoteTVState = async (state) => {
+    if (!state || typeof state !== "object") return;
+
+    const selfId = root.getScene()?.sharedStateControls?.getSelfId?.();
+    if (selfId && state.lastActorId === selfId) {
+      root.metadata = {
+        ...(root.metadata || {}),
+        tvLatestSharedState: { ...state },
+      };
+      return;
+    }
+
+    root.metadata = {
+      ...(root.metadata || {}),
+      tvControllerId: state.controllerId || root.metadata?.tvControllerId || null,
+      tvLatestSharedState: { ...state },
+    };
+
+    applyingRemoteTVState = true;
+    try {
+      if (typeof state.panelVisible === "boolean") {
+        player.host.setEnabled(state.panelVisible);
+        setTVPickableState(!state.panelVisible);
+      }
+
+      if (Number.isFinite(state.pageIndex)) {
+        player.state.pageIndex = state.pageIndex;
+        player.state.refreshTrackList?.();
+      }
+
+      const sharedTrack = state.currentTrack?.url
+        ? (
+            player.state.tracks.find((track) => track.url === state.currentTrack.url) ||
+            state.currentTrack
+          )
+        : null;
+
+      if (sharedTrack?.url) {
+        const currentUrl = player.state.currentTrack?.url || null;
+        if (currentUrl !== sharedTrack.url) {
+          playTVTrack(root, sharedTrack, player.state.statusText);
+        }
+
+        const { video } = ensureTVVideoPlayer(root);
+        if (Number.isFinite(state.currentTime) && Math.abs((video.currentTime || 0) - state.currentTime) > 0.35) {
+          try {
+            video.currentTime = Math.max(state.currentTime, 0);
+          } catch {}
+        }
+
+        if (state.paused) {
+          video.pause();
+          player.state.playPauseButton.textBlock.text = "Play";
+          player.state.statusText.text = `${sharedTrack.title}\nPaused`;
+        } else {
+          const playPromise = video.play();
+          player.state.playPauseButton.textBlock.text = "Pause";
+          if (playPromise?.catch) {
+            playPromise.catch(() => {});
+          }
+          player.state.statusText.text = `${sharedTrack.title}\nNow Playing`;
+        }
+      } else if (state.currentTrack === null) {
+        stopTVPlayback(root, player.state);
+      }
+
+      root.metadata?.applyTVScreenState?.();
+    } finally {
+      applyingRemoteTVState = false;
+    }
+  };
 
   root.metadata = {
     ...(root.metadata || {}),
@@ -570,20 +775,44 @@ export function configureSceneTV(result, customOptions = {}) {
     tvPlayerHost: player.host,
     tvPlayerState: player.state,
     applyTVScreenState: () => applyScreenState(root, player.host),
+    applyRemoteTVState,
+    emitTVDebugPlayback,
+    emitTVState,
     onActivate: () => {
+      claimTVControl(root);
       const nextVisible = !player.host.isEnabled();
       player.host.setEnabled(nextVisible);
       setTVPickableState(!nextVisible);
       applyScreenState(root, player.host);
+      emitTVState(true);
     },
   };
 
   root.getScene().onBeforeRenderObservable.add(() => {
     updateTVAudioVolume(root);
+    const video = root.metadata?.tvVideoElement;
+    if (video && !video.paused) {
+      emitTVState(false);
+    }
   });
 
   root.metadata.applyTVScreenState();
-  loadTVTracks(root);
+  void loadTVTracks(root).finally(() => {
+    const latestSharedState =
+      root.getScene()?.sharedStateControls?.getState("tv", tvStateKey) ||
+      root.metadata?.tvLatestSharedState ||
+      null;
+
+    if (latestSharedState) {
+      void applyRemoteTVState(latestSharedState);
+    }
+  });
+
+  registerSharedStateReady(root.getScene(), (controls) => {
+    controls.subscribe("tv", tvStateKey, (state) => {
+      void applyRemoteTVState(state);
+    });
+  });
 
   for (const mesh of resultMeshes) {
     mesh.isPickable = true;

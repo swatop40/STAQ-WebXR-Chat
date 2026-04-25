@@ -292,18 +292,44 @@ function registerPictureSwapResult(key, result) {
   configurePictureSwap(result);
 }
 
+function registerSharedStateReady(scene, callback) {
+  if (!scene || typeof callback !== "function") return;
+
+  if (scene.sharedStateControls) {
+    callback(scene.sharedStateControls);
+    return;
+  }
+
+  if (!scene._sharedStateReadyCallbacks) {
+    scene._sharedStateReadyCallbacks = [];
+  }
+
+  scene._sharedStateReadyCallbacks.push(callback);
+}
+
 function configurePictureSwap(primaryResult) {
   const primaryRoot = primaryResult.meshes[0];
   if (primaryRoot?.metadata?.pictureSwapConfigured) return;
   const primaryPictureMesh = findPictureSurfaceMesh(primaryResult);
   if (!primaryRoot || !primaryPictureMesh) return;
 
+  const scene = primaryRoot.getScene();
+  const pictureStateKey = primaryRoot.name;
+  let applyingRemoteState = false;
+
+  const applyPictureVisibility = (visible, shouldBroadcast = true) => {
+    primaryPictureMesh.setEnabled(visible);
+    if (shouldBroadcast && !applyingRemoteState) {
+      scene.sharedStateControls?.emit("picture", pictureStateKey, { visible });
+    }
+  };
+
   primaryRoot.metadata = {
     ...(primaryRoot.metadata || {}),
     activateOnSelect: true,
     pictureSwapConfigured: true,
     onActivate: () => {
-      primaryPictureMesh.setEnabled(!primaryPictureMesh.isEnabled());
+      applyPictureVisibility(!primaryPictureMesh.isEnabled(), true);
     },
   };
 
@@ -316,6 +342,15 @@ function configurePictureSwap(primaryResult) {
       interactableRoot: primaryRoot,
     };
   }
+
+  registerSharedStateReady(scene, (controls) => {
+    controls.subscribe("picture", pictureStateKey, (state) => {
+      if (typeof state?.visible !== "boolean") return;
+      applyingRemoteState = true;
+      applyPictureVisibility(state.visible, false);
+      applyingRemoteState = false;
+    });
+  });
 }
 
 function findPictureSurfaceMesh(result) {
@@ -407,9 +442,11 @@ export async function startScene(engine) {
 
   const mirror = createMirror(scene);
 
-  await loadSceneModel(scene, "test-room.glb");
+  const roomResult = await loadSceneModel(scene, "test-room.glb");
+  for (const mesh of roomResult.meshes) {
+    mesh.checkCollisions = false;
+  }
   await addTestRoomProps(scene);
-  addTestRoomCollision(scene);
 
   await setupSharedWebXR(scene, {
     ground,

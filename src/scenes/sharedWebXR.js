@@ -27,6 +27,7 @@ export const DEFAULT_XR_SETTINGS = {
   desktopSprintSpeed: 8.4,
   desktopLookSensitivity: 1,
   xrMoveSpeed: 3.6,
+  playerStepHeight: 0.28,
   xrMoveDeadzone: 0.18,
   xrTurnMode: "snap",
   xrSmoothTurnSpeed: 1.8,
@@ -97,6 +98,21 @@ function worldToLocalPosition(node, worldPos) {
   const inv = node.getWorldMatrix().clone();
   inv.invert();
   return Vector3.TransformCoordinates(worldPos, inv);
+}
+
+function registerSharedStateReady(scene, callback) {
+  if (!scene || typeof callback !== "function") return;
+
+  if (scene.sharedStateControls) {
+    callback(scene.sharedStateControls);
+    return;
+  }
+
+  if (!scene._sharedStateReadyCallbacks) {
+    scene._sharedStateReadyCallbacks = [];
+  }
+
+  scene._sharedStateReadyCallbacks.push(callback);
 }
 
 function setupMirror(scene, mirror) {
@@ -180,6 +196,71 @@ function setupDartInteractions(scene, xr, options = {}) {
     { maxRadius: 0.78, points: 20, label: "Outer Red" },
     { maxRadius: 1.05, points: 10, label: "Outer Gray" },
   ];
+  const dartLastSyncAt = new Map();
+  let applyingRemoteDartGameState = false;
+
+  function getDartStateKey(root) {
+    return root?.name || null;
+  }
+
+  function serializeQuaternion(quaternion) {
+    return quaternion
+      ? { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
+      : null;
+  }
+
+  function serializeVector3(vector) {
+    return vector
+      ? { x: vector.x, y: vector.y, z: vector.z }
+      : null;
+  }
+
+  function serializeDartTransform(root, overrides = {}) {
+    if (!root) return null;
+
+    const matrix = root.computeWorldMatrix(true);
+    const scaling = new Vector3();
+    const rotation = new Quaternion();
+    const position = new Vector3();
+    matrix.decompose(scaling, rotation, position);
+
+    return {
+      position: serializeVector3(position),
+      rotation: serializeQuaternion(rotation),
+      scaling: serializeVector3(scaling),
+      enabled: root.isEnabled(),
+      isPickable: !!root.isPickable,
+      isHeld: !!root.metadata?.isHeld,
+      ownerId: overrides.ownerId ?? root.metadata?.heldBy ?? null,
+      ...overrides,
+    };
+  }
+
+  function emitDartState(root, overrides = {}, force = false) {
+    const key = getDartStateKey(root);
+    const controls = scene.sharedStateControls;
+    if (!key || !controls) return;
+
+    const now = performance.now();
+    if (!force && now - (dartLastSyncAt.get(key) || 0) < 80) return;
+    dartLastSyncAt.set(key, now);
+    controls.emit("dart", key, serializeDartTransform(root, overrides));
+  }
+
+  function emitDartGameState(force = false) {
+    if (applyingRemoteDartGameState) return;
+
+    scene.sharedStateControls?.emit("dartGame", "default", {
+      activePlayer: dartScore.activePlayer,
+      turnThrows: dartScore.turnThrows,
+      throwsPerTurn: dartScore.throwsPerTurn,
+      gameOver: dartScore.gameOver,
+      players: dartScore.players.map((player) => ({ ...player })),
+      hitText: dartScore.hitText?.text || "Ready",
+      statusText: dartScore.statusText?.text || "Player 1 throws",
+      force: !!force,
+    });
+  }
 
   function isSuppressedInteractionMesh(mesh) {
     let current = mesh;
@@ -593,6 +674,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     }
 
     updateDartGameDisplay("Player 1 throws");
+    emitDartGameState(true);
     console.log("[DART] Game restarted");
   }
 
@@ -609,6 +691,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     const player = dartScore.players[dartScore.activePlayer];
     const throwLabel = `Dart ${dartScore.turnThrows + 1}/${dartScore.throwsPerTurn}`;
     dartScore.statusText.text = status || `${player.name} throws\n${throwLabel}`;
+    emitDartGameState();
   }
 
   function findDartBoardRoot() {
@@ -719,6 +802,11 @@ function setupDartInteractions(scene, xr, options = {}) {
 
     root.setParent(null);
     recordDartBoardScore(root, boardRoot, pick);
+    emitDartState(root, {
+      isHeld: false,
+      ownerId: null,
+      isPickable: false,
+    }, true);
     console.log("[DART] Stuck to dart board");
     return true;
   }
@@ -748,6 +836,11 @@ function setupDartInteractions(scene, xr, options = {}) {
         .add(lift)
     );
     setDartPickable(root, true);
+    emitDartState(root, {
+      isHeld: false,
+      ownerId: null,
+      isPickable: true,
+    }, true);
     console.log("[DART] Hit scene collider");
     return true;
   }
@@ -805,6 +898,12 @@ function setupDartInteractions(scene, xr, options = {}) {
     root.setParent(holder);
     root.position.set(0.035, -0.025, 0.09);
     root.rotationQuaternion = Quaternion.FromEulerAngles(Math.PI / 2, 0, 0);
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: true,
+      heldBy: scene.sharedStateControls?.getSelfId?.() || controller.uniqueId || "xr",
+    };
+    emitDartState(root, { isHeld: true, ownerId: root.metadata.heldBy, isPickable: false }, true);
     return true;
   }
 
@@ -836,10 +935,16 @@ function setupDartInteractions(scene, xr, options = {}) {
     root.setParent(anchor);
     root.position.set(0.36, -0.42, 1.05);
     root.rotationQuaternion = desktopHeldDartRotation;
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: true,
+      heldBy: scene.sharedStateControls?.getSelfId?.() || "desktop",
+    };
     desktopHold.root = root;
     desktopHold.viewRoot = viewRoot;
     desktopHold.charging = false;
     desktopHold.chargeStartedAt = 0;
+    emitDartState(root, { isHeld: true, ownerId: root.metadata.heldBy, isPickable: false }, true);
     return true;
   }
 
@@ -854,6 +959,11 @@ function setupDartInteractions(scene, xr, options = {}) {
     root.position.copyFrom(worldPos);
     alignDartWithVelocity(root, velocity);
     setDartPickable(root, true);
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: false,
+      heldBy: null,
+    };
     registerDartThrow(root);
 
     const impostor = ensureDartPhysics(root);
@@ -861,6 +971,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     impostor.setAngularVelocity(Vector3.Zero());
     flyingDarts.add(root);
     dartFlightPositions.set(root, worldPos.clone());
+    emitDartState(root, { isHeld: false, ownerId: null, isPickable: true }, true);
   }
 
   function releaseDesktopDart(root, velocity) {
@@ -936,6 +1047,81 @@ function setupDartInteractions(scene, xr, options = {}) {
       (scene.objectInteractionState?.xrHeldObjects?.size || 0) > 0;
   }
 
+  registerSharedStateReady(scene, (controls) => {
+    const seenDarts = new Set();
+    for (const mesh of scene.meshes) {
+      const root = getDartRoot(mesh);
+      if (!root || seenDarts.has(root)) continue;
+      seenDarts.add(root);
+      const key = getDartStateKey(root);
+      if (!key) continue;
+
+      controls.subscribe("dart", key, (state) => {
+        if (
+          !state ||
+          state.ownerId === controls.getSelfId?.() ||
+          state.lastActorId === controls.getSelfId?.()
+        ) return;
+        if (root === desktopHold.root) return;
+        if ([...xrHeldDarts.values()].includes(root)) return;
+
+        disposeDartPhysics(root);
+        flyingDarts.delete(root);
+        dartFlightPositions.delete(root);
+        root.setParent(null);
+
+        if (state.position) {
+          root.position.copyFromFloats(state.position.x || 0, state.position.y || 0, state.position.z || 0);
+        }
+        if (state.rotation) {
+          root.rotationQuaternion = new Quaternion(
+            state.rotation.x || 0,
+            state.rotation.y || 0,
+            state.rotation.z || 0,
+            state.rotation.w || 1
+          );
+        }
+        if (state.scaling) {
+          root.scaling.copyFromFloats(state.scaling.x || 1, state.scaling.y || 1, state.scaling.z || 1);
+        } else {
+          restoreDartBaseScale(root);
+        }
+
+        setDartVisible(root, state.enabled !== false);
+        setDartPickable(root, state.isPickable !== false);
+        root.metadata = {
+          ...(root.metadata || {}),
+          isHeld: !!state.isHeld,
+          heldBy: state.ownerId || null,
+        };
+      });
+    }
+
+    controls.subscribe("dartGame", "default", (state) => {
+      if (!state || !Array.isArray(state.players)) return;
+
+      applyingRemoteDartGameState = true;
+      try {
+        dartScore.activePlayer = Number.isFinite(state.activePlayer) ? state.activePlayer : 0;
+        dartScore.turnThrows = Number.isFinite(state.turnThrows) ? state.turnThrows : 0;
+        dartScore.throwsPerTurn = Number.isFinite(state.throwsPerTurn)
+          ? state.throwsPerTurn
+          : dartScore.throwsPerTurn;
+        dartScore.gameOver = !!state.gameOver;
+        dartScore.players = state.players.map((player, index) => ({
+          name: player?.name || `Player ${index + 1}`,
+          remaining: Number.isFinite(player?.remaining) ? player.remaining : 300,
+        }));
+        if (dartScore.hitText && typeof state.hitText === "string") {
+          dartScore.hitText.text = state.hitText;
+        }
+        updateDartGameDisplay(typeof state.statusText === "string" ? state.statusText : null);
+      } finally {
+        applyingRemoteDartGameState = false;
+      }
+    });
+  });
+
   initializeDartGameDisplay();
 
   scene.onPointerObservable.add((pointerInfo) => {
@@ -1008,6 +1194,15 @@ function setupDartInteractions(scene, xr, options = {}) {
 
       alignDartWithVelocity(dart, velocity);
       dart.physicsImpostor?.setAngularVelocity(Vector3.Zero());
+      emitDartState(dart);
+    }
+
+    if (desktopHold.root) {
+      emitDartState(desktopHold.root);
+    }
+
+    for (const root of xrHeldDarts.values()) {
+      emitDartState(root);
     }
   });
 
@@ -1079,11 +1274,28 @@ function setupObjectInteractions(scene, xr) {
   const desktopMinThrowSpeed = 2.4;
   const desktopMaxThrowSpeed = 9.5;
   const xrDropSpeedThreshold = 1.2;
+  const objectLastSyncAt = new Map();
 
   scene.objectInteractionState = {
     desktopHold,
     xrHeldObjects,
   };
+
+  function getObjectStateKey(root) {
+    return root?.name || null;
+  }
+
+  function serializeQuaternion(quaternion) {
+    return quaternion
+      ? { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
+      : null;
+  }
+
+  function serializeVector3(vector) {
+    return vector
+      ? { x: vector.x, y: vector.y, z: vector.z }
+      : null;
+  }
 
   function getSceneInteractableRoot(mesh) {
     let current = mesh;
@@ -1216,6 +1428,28 @@ function setupObjectInteractions(scene, xr) {
     const position = new Vector3();
     matrix.decompose(scaling, rotation, position);
     return { scaling, rotation, position };
+  }
+
+  function emitObjectState(root, overrides = {}, force = false) {
+    const controls = scene.sharedStateControls;
+    const key = getObjectStateKey(root);
+    if (!controls || !key || !root) return;
+
+    const now = performance.now();
+    if (!force && now - (objectLastSyncAt.get(key) || 0) < 80) return;
+    objectLastSyncAt.set(key, now);
+
+    const world = captureWorldTransform(root);
+    controls.emit("object", key, {
+      position: serializeVector3(world.position),
+      rotation: serializeQuaternion(world.rotation),
+      scaling: serializeVector3(world.scaling),
+      enabled: root.isEnabled(),
+      isPickable: !!root.isPickable,
+      isHeld: !!root.metadata?.isHeld,
+      ownerId: overrides.ownerId ?? root.metadata?.heldBy ?? null,
+      ...overrides,
+    });
   }
 
   function getDesktopChargeAmount() {
@@ -1356,6 +1590,24 @@ function setupObjectInteractions(scene, xr) {
     };
   }
 
+  function getHolderCompensatedScale(root, holder) {
+    const baseLocalScaling = root?.metadata?.baseLocalScaling?.clone?.() || root?.scaling?.clone?.() || Vector3.One();
+    if (!holder?.computeWorldMatrix) {
+      return baseLocalScaling;
+    }
+
+    const holderScaling = new Vector3();
+    const holderRotation = new Quaternion();
+    const holderPosition = new Vector3();
+    holder.computeWorldMatrix(true).decompose(holderScaling, holderRotation, holderPosition);
+
+    return new Vector3(
+      Math.abs(holderScaling.x) > 0.0001 ? baseLocalScaling.x / holderScaling.x : baseLocalScaling.x,
+      Math.abs(holderScaling.y) > 0.0001 ? baseLocalScaling.y / holderScaling.y : baseLocalScaling.y,
+      Math.abs(holderScaling.z) > 0.0001 ? baseLocalScaling.z / holderScaling.z : baseLocalScaling.z
+    );
+  }
+
   function releaseHeldObject(root, linearVelocity = null, angularVelocity = null) {
     if (!root) return;
 
@@ -1376,6 +1628,7 @@ function setupObjectInteractions(scene, xr) {
       isHeld: false,
       heldBy: null,
     };
+    emitObjectState(root, { isHeld: false, ownerId: null }, true);
   }
 
   function applyHeldTransformFromGrabPoint(root, mode = "xr") {
@@ -1429,16 +1682,14 @@ function setupObjectInteractions(scene, xr) {
     disposeHeldObjectPhysics(root);
     setInteractablePickable(root, false);
     root.parent = holder;
-    const baseLocalScaling = root.metadata?.baseLocalScaling;
-    if (baseLocalScaling) {
-      root.scaling.copyFrom(baseLocalScaling);
-    }
+    root.scaling.copyFrom(getHolderCompensatedScale(root, holder));
     applyHeldTransformFromGrabPoint(root, mode);
     root.metadata = {
       ...(root.metadata || {}),
       isHeld: true,
       heldBy,
     };
+    emitObjectState(root, { isHeld: true, ownerId: heldBy, isPickable: false }, true);
     return true;
   }
 
@@ -1497,6 +1748,57 @@ function setupObjectInteractions(scene, xr) {
     }
   }
 
+  registerSharedStateReady(scene, (controls) => {
+    const seenRoots = new Set();
+    for (const mesh of scene.meshes) {
+      const root = getSceneInteractableRoot(mesh);
+      if (!root || !root.metadata?.pickupEnabled || seenRoots.has(root)) continue;
+      seenRoots.add(root);
+
+      const key = getObjectStateKey(root);
+      if (!key) continue;
+
+      controls.subscribe("object", key, (state) => {
+        if (
+          !state ||
+          state.ownerId === controls.getSelfId?.() ||
+          state.lastActorId === controls.getSelfId?.()
+        ) return;
+        if (root === desktopHold.root) return;
+        if ([...xrHeldObjects.values()].includes(root)) return;
+
+        disposeHeldObjectPhysics(root);
+        root.setParent(null);
+
+        if (state.position) {
+          root.position.copyFromFloats(state.position.x || 0, state.position.y || 0, state.position.z || 0);
+        }
+        if (state.rotation) {
+          root.rotationQuaternion = new Quaternion(
+            state.rotation.x || 0,
+            state.rotation.y || 0,
+            state.rotation.z || 0,
+            state.rotation.w || 1
+          );
+        }
+        if (state.scaling) {
+          root.scaling.copyFromFloats(state.scaling.x || 1, state.scaling.y || 1, state.scaling.z || 1);
+        } else if (root.metadata?.baseLocalScaling) {
+          root.scaling.copyFrom(root.metadata.baseLocalScaling);
+        }
+
+        root.setEnabled(state.enabled !== false);
+        setInteractablePickable(root, state.isPickable !== false);
+        root.metadata = {
+          ...(root.metadata || {}),
+          isHeld: !!state.isHeld,
+          heldBy: state.ownerId || null,
+          dropPhysicsActive: false,
+        };
+      });
+    }
+  });
+
   scene.onPointerObservable.add((pointerInfo) => {
     if (isInXR(scene)) return;
 
@@ -1543,11 +1845,14 @@ function setupObjectInteractions(scene, xr) {
   scene.onBeforeRenderObservable.add(() => {
     if (desktopHold.root && !isInXR(scene)) {
       applyDesktopChargeVisual(desktopHold.root, desktopHold.anchor);
+      emitObjectState(desktopHold.root);
     }
 
+    const syncedRoots = new Set();
     for (const mesh of scene.meshes) {
       const root = mesh?.metadata?.interactableRoot || null;
-      if (!root?.metadata?.dropPhysicsActive) continue;
+      if (!root?.metadata?.dropPhysicsActive || syncedRoots.has(root)) continue;
+      syncedRoots.add(root);
 
       const collider = root.metadata.dropPhysicsCollider;
       if (!collider) continue;
@@ -1565,10 +1870,15 @@ function setupObjectInteractions(scene, xr) {
 
       root.position.copyFrom(colliderPosition.add(rotatedOffset));
       root.rotationQuaternion = colliderRotation.clone();
+      emitObjectState(root);
     }
 
     if (desktopHold.root && isInXR(scene)) {
       releaseDesktopObject();
+    }
+
+    for (const root of xrHeldObjects.values()) {
+      emitObjectState(root);
     }
   });
 
@@ -1819,19 +2129,16 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   chatScroll.thumbLength = 0.2;
   chatPanel.addControl(chatScroll, 0, 0);
 
-  const chatMessagesText = new GUI.TextBlock("chatMessagesText");
-  chatMessagesText.text = "No messages yet";
-  chatMessagesText.color = "white";
-  chatMessagesText.fontFamily = "Arial";
-  chatMessagesText.fontSize = 42;
-  chatMessagesText.textWrapping = true;
-  chatMessagesText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
-  chatMessagesText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
-  chatMessagesText.paddingLeft = "24px";
-  chatMessagesText.paddingRight = "24px";
-  chatMessagesText.paddingTop = "18px";
-  chatMessagesText.paddingBottom = "18px";
-  chatScroll.addControl(chatMessagesText);
+  const chatMessagesStack = new GUI.StackPanel("chatMessagesStack");
+  chatMessagesStack.width = "100%";
+  chatMessagesStack.isVertical = true;
+  chatMessagesStack.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+  chatMessagesStack.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
+  chatMessagesStack.paddingLeft = "24px";
+  chatMessagesStack.paddingRight = "24px";
+  chatMessagesStack.paddingTop = "18px";
+  chatMessagesStack.paddingBottom = "18px";
+  chatScroll.addControl(chatMessagesStack);
 
   const chatInputGrid = new GUI.Grid("chatInputGrid");
   chatInputGrid.width = "98%";
@@ -1851,7 +2158,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   chatInput.focusedColor = "white";
   chatInput.thickness = 2;
   chatInput.cornerRadius = 14;
-  chatInput.fontSize = 42;
+  chatInput.fontSize = 72;
   chatInput.promptMessage = "Type a message";
   chatInput.textHighlightColor = "#2563eb";
   chatInput.paddingLeft = "16px";
@@ -1864,13 +2171,13 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   chatInputGrid.addControl(chatInput, 0, 0);
 
   const chatSendButton = GUI.Button.CreateSimpleButton("chatSendButton", "Send");
-  styleMenuButton(chatSendButton, 52, "#2f7d5f");
+  styleMenuButton(chatSendButton, 156, "#2f7d5f");
   chatSendButton.width = "90%";
   chatSendButton.height = "76%";
   chatInputGrid.addControl(chatSendButton, 0, 1);
 
   const chatKeyboardButton = GUI.Button.CreateSimpleButton("chatKeyboardButton", "Keyboard");
-  styleMenuButton(chatKeyboardButton, 42, "#5b6b7c");
+  styleMenuButton(chatKeyboardButton, 72, "#5b6b7c");
   chatKeyboardButton.width = "90%";
   chatKeyboardButton.height = "76%";
   chatInputGrid.addControl(chatKeyboardButton, 0, 2);
@@ -1885,13 +2192,13 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   chatPanel.addControl(chatControlsGrid, 2, 0);
 
   const chatClearButton = GUI.Button.CreateSimpleButton("chatClearButton", "Clear");
-  styleMenuButton(chatClearButton, 46, "#5b6b7c");
+  styleMenuButton(chatClearButton, 138, "#5b6b7c");
   chatClearButton.width = "88%";
   chatClearButton.height = "78%";
   chatControlsGrid.addControl(chatClearButton, 0, 0);
 
   const chatBackButton = GUI.Button.CreateSimpleButton("chatBackButton", "Back");
-  styleMenuButton(chatBackButton, 46, "#5b6b7c");
+  styleMenuButton(chatBackButton, 138, "#5b6b7c");
   chatBackButton.width = "88%";
   chatBackButton.height = "78%";
   chatControlsGrid.addControl(chatBackButton, 0, 1);
@@ -1900,7 +2207,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   chatHintText.text = "Desktop: type here";
   chatHintText.color = "#d8e6f3";
   chatHintText.fontFamily = "Arial";
-  chatHintText.fontSize = 34;
+  chatHintText.fontSize = 0;
   chatHintText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
   chatHintText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
   chatHintText.paddingLeft = "14px";
@@ -1909,11 +2216,11 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
 
   const keyboardBoard = MeshBuilder.CreatePlane(
     "menuKeyboardBoard",
-    { width: 1.98, height: 0.7, sideOrientation: Mesh.DOUBLESIDE },
+    { width: 2.35, height: 1.16, sideOrientation: Mesh.DOUBLESIDE },
     scene
   );
   keyboardBoard.parent = menuHost;
-  keyboardBoard.position.set(0, 1.42, 0.02);
+  keyboardBoard.position.set(0, -0.78, 0.02);
   keyboardBoard.isPickable = true;
   keyboardBoard.metadata = {
     ...(keyboardBoard.metadata || {}),
@@ -2070,10 +2377,40 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   function refreshChatPanel() {
     activeListPanelMode = "chat";
     const messages = scene.chatControls?.getMessages?.() || [];
-    chatMessagesText.text = messages.length
-      ? messages.map((message) => `${message.senderName}: ${message.text}`).join("\n\n")
-      : "No messages yet";
+
+    chatMessagesStack.clearControls();
+
+    if (!messages.length) {
+      const emptyText = new GUI.TextBlock("chatMessagesEmpty");
+      emptyText.text = "No messages yet";
+      emptyText.color = "white";
+      emptyText.fontFamily = "Arial";
+      emptyText.fontSize = 126;
+      emptyText.textWrapping = true;
+      emptyText.resizeToFit = true;
+      emptyText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+      emptyText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
+      emptyText.height = "56px";
+      chatMessagesStack.addControl(emptyText);
+    } else {
+      for (const message of messages) {
+        const messageText = new GUI.TextBlock(`chatMessage_${message.id}`);
+        messageText.text = `${message.senderName}: ${message.text}`;
+        messageText.color = "white";
+        messageText.fontFamily = "Arial";
+        messageText.fontSize = 126;
+        messageText.textWrapping = true;
+        messageText.resizeToFit = true;
+        messageText.width = 0.96;
+        messageText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+        messageText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
+        messageText.paddingBottom = "20px";
+        chatMessagesStack.addControl(messageText);
+      }
+    }
+
     lastChatMessagesSignature = getChatMessagesSignature();
+    chatScroll.verticalBar.value = 1;
   }
 
   function showChatPanel() {
@@ -2094,7 +2431,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
 
   function addKeyboardKey(label, callback, row, column, columnSpan = 1, background = "#39556f") {
     const button = GUI.Button.CreateSimpleButton(controlName(label, "chatkey_btn"), label);
-    styleMenuButton(button, 40, background);
+    styleMenuButton(button, 120, background);
     button.width = "92%";
     button.height = "82%";
     button.onPointerUpObservable.add(callback);
@@ -3004,11 +3341,47 @@ export async function setupSharedWebXR(scene, options) {
       return Vector3.Zero();
     }
 
+    const baseY = playerHeight * 0.5;
+    const stepHeight = Math.max(settings.playerStepHeight || 0, 0);
     const startPosition = scene.playerMesh.position.clone();
     scene.playerMesh.moveWithCollisions(moveVector);
     const appliedMove = scene.playerMesh.position.subtract(startPosition);
-    scene.playerMesh.position.y = playerHeight * 0.5;
-    return appliedMove;
+    const appliedHorizontal = new Vector3(appliedMove.x, 0, appliedMove.z);
+
+    if (moveVector.y === 0 && moveVector.lengthSquared() > 0.000001) {
+      const requestedHorizontal = new Vector3(moveVector.x, 0, moveVector.z);
+      const wasBlocked = requestedHorizontal.lengthSquared() > 0.000001 &&
+        appliedHorizontal.length() + 0.001 < requestedHorizontal.length();
+
+      if (wasBlocked && stepHeight > 0) {
+        scene.playerMesh.position.copyFrom(startPosition);
+        scene.playerMesh.moveWithCollisions(new Vector3(0, stepHeight, 0));
+        scene.playerMesh.moveWithCollisions(moveVector);
+        scene.playerMesh.moveWithCollisions(new Vector3(0, -(stepHeight + 0.08), 0));
+
+        if (scene.playerMesh.position.y < baseY) {
+          scene.playerMesh.position.y = baseY;
+        }
+
+        const steppedMove = scene.playerMesh.position.subtract(startPosition);
+        const steppedHorizontal = new Vector3(steppedMove.x, 0, steppedMove.z);
+        if (steppedHorizontal.length() + 0.001 >= appliedHorizontal.length()) {
+          return steppedMove;
+        }
+
+        scene.playerMesh.position.copyFrom(startPosition.add(appliedMove));
+      }
+    }
+
+    if (moveVector.y === 0) {
+      scene.playerMesh.moveWithCollisions(new Vector3(0, -(stepHeight + 0.12), 0));
+    }
+
+    if (scene.playerMesh.position.y < baseY) {
+      scene.playerMesh.position.y = baseY;
+    }
+
+    return scene.playerMesh.position.subtract(startPosition);
   }
 
   scene.onBeforeRenderObservable.add(() => {
@@ -3128,7 +3501,9 @@ export async function setupSharedWebXR(scene, options) {
 
     mesh.rotationQuaternion = Quaternion.Identity();
     mesh.rotation.set(0, 0, 0);
-    mesh.position.y = playerHeight * 0.5;
+    if (mesh.position.y < playerHeight * 0.5) {
+      mesh.position.y = playerHeight * 0.5;
+    }
     cam.position.y = playerHeight * 0.5;
 
     if (mesh.physicsImpostor) {

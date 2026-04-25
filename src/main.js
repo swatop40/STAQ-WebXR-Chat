@@ -235,10 +235,81 @@ const VOICE_RADIUS = 12;
 let vrAvatarHeightOverride = null;
 const peerConnections = new Map();
 const remoteAudioEls = new Map();
+const remoteVoiceAnalysers = new Map();
 const remotePlayerNames = new Map();
 const mutedRemoteIds = new Set();
 let localVoiceAnalyser = null;
 const serverChatMessages = [];
+const sharedSceneState = new Map();
+const sharedSceneStateListeners = new Map();
+
+function getScopeStateMap(scope) {
+  let scopeMap = sharedSceneState.get(scope);
+  if (!scopeMap) {
+    scopeMap = new Map();
+    sharedSceneState.set(scope, scopeMap);
+  }
+  return scopeMap;
+}
+
+function getScopeListenerMap(scope) {
+  let scopeMap = sharedSceneStateListeners.get(scope);
+  if (!scopeMap) {
+    scopeMap = new Map();
+    sharedSceneStateListeners.set(scope, scopeMap);
+  }
+  return scopeMap;
+}
+
+function notifySharedSceneState(scope, key, state) {
+  const scopeListeners = sharedSceneStateListeners.get(scope);
+  const listeners = scopeListeners?.get(key);
+  if (!listeners?.size) return;
+
+  for (const listener of listeners) {
+    try {
+      listener(state);
+    } catch (error) {
+      console.warn(`[SCENE] Failed handling shared state ${scope}:${key}`, error);
+    }
+  }
+}
+
+function applySharedSceneStateUpdate(scope, key, state) {
+  if (!scope || !key || !state || typeof state !== "object") return;
+
+  const scopeState = getScopeStateMap(scope);
+  const nextState = {
+    ...(scopeState.get(key) || {}),
+    ...state,
+  };
+  scopeState.set(key, nextState);
+  notifySharedSceneState(scope, key, nextState);
+}
+
+function replaceSharedSceneState(nextSceneState) {
+  sharedSceneState.clear();
+
+  if (!nextSceneState || typeof nextSceneState !== "object") return;
+
+  for (const [scope, entries] of Object.entries(nextSceneState)) {
+    if (!entries || typeof entries !== "object") continue;
+    const scopeState = getScopeStateMap(scope);
+    for (const [key, state] of Object.entries(entries)) {
+      scopeState.set(key, { ...(state || {}) });
+    }
+  }
+
+  for (const [scope, scopeListeners] of sharedSceneStateListeners.entries()) {
+    const scopeState = sharedSceneState.get(scope) || new Map();
+    for (const [key] of scopeListeners.entries()) {
+      const currentState = scopeState.get(key);
+      if (currentState) {
+        notifySharedSceneState(scope, key, currentState);
+      }
+    }
+  }
+}
 
 function logConnectedPlayers(context, playersLike = null) {
   const ids = playersLike
@@ -251,6 +322,18 @@ function logConnectedPlayers(context, playersLike = null) {
 }
 
 function cleanupRemoteAudio(playerId) {
+  const voiceAnalyser = remoteVoiceAnalysers.get(playerId);
+  if (voiceAnalyser) {
+    try {
+      voiceAnalyser.source?.disconnect?.();
+      voiceAnalyser.analyser?.disconnect?.();
+    } catch (err) {
+      console.warn("[VOICE] remote analyser cleanup issue:", playerId, err);
+    }
+
+    remoteVoiceAnalysers.delete(playerId);
+  }
+
   const audioEl = remoteAudioEls.get(playerId);
   if (audioEl) {
     try {
@@ -407,6 +490,7 @@ async function createRemoteAudio(playerId, stream) {
   audioEl.srcObject = stream;
   document.body.appendChild(audioEl);
   remoteAudioEls.set(playerId, audioEl);
+  remoteVoiceAnalysers.set(playerId, createVoiceAnalyser(stream));
   updateRemoteAudioVolume(playerId);
 
   try {
@@ -454,6 +538,44 @@ function updateLocalVoiceActivity() {
 
   localAvatarParts.isSpeaking = isSpeaking;
   updateAvatarFaceState(localAvatarParts, now);
+}
+
+function updateRemoteVoiceActivity() {
+  const now = performance.now();
+
+  for (const [playerId, root] of remoteMeshes.entries()) {
+    const parts = root?.metadata;
+    if (!parts) continue;
+
+    const voiceState = remoteVoiceAnalysers.get(playerId);
+    let isSpeaking = false;
+
+    if (voiceState) {
+      const level = readVoiceLevel(voiceState);
+      if (voiceState.speaking) {
+        if (level >= AVATAR_FACE.speechCloseThreshold) {
+          voiceState.lastAboveCloseAt = now;
+          isSpeaking = true;
+        } else {
+          const lastAboveCloseAt = voiceState.lastAboveCloseAt ?? now;
+          isSpeaking = (now - lastAboveCloseAt) <= AVATAR_FACE.speechCloseHoldMs;
+        }
+      } else {
+        if (level >= AVATAR_FACE.speechOpenThreshold) {
+          voiceState.firstAboveOpenAt ??= now;
+          isSpeaking = (now - voiceState.firstAboveOpenAt) >= AVATAR_FACE.speechOpenHoldMs;
+        } else {
+          voiceState.firstAboveOpenAt = null;
+          isSpeaking = false;
+        }
+      }
+
+      voiceState.speaking = isSpeaking;
+    }
+
+    parts.isSpeaking = isSpeaking;
+    updateAvatarFaceState(parts, now);
+  }
 }
 
 function getPercentLabel(value) {
@@ -579,6 +701,70 @@ function createChatControls() {
 
       socket.emit("chat-message", { text: cleanText });
       return true;
+    },
+  };
+}
+
+function createSharedStateControls() {
+  return {
+    getSelfId() {
+      return selfId;
+    },
+    getState(scope, key) {
+      return sharedSceneState.get(scope)?.get(key) || null;
+    },
+    emit(scope, key, state) {
+      if (!scope || !key || !state || typeof state !== "object") return false;
+
+      const nextState = {
+        ...(sharedSceneState.get(scope)?.get(key) || {}),
+        ...state,
+        lastActorId: selfId,
+      };
+      getScopeStateMap(scope).set(key, nextState);
+
+      if (socket.connected) {
+        socket.emit("scene-state-update", { scope, key, state }, () => {});
+      }
+      return true;
+    },
+    debugTVPlayback(key, payload = {}) {
+      if (!socket.connected || !key) return false;
+
+      socket.emit("tv-debug-message", {
+        tvKey: key,
+        title: payload.title || "Unknown Song",
+        url: payload.url || null,
+        action: payload.action || "play",
+      });
+      return true;
+    },
+    subscribe(scope, key, listener, options = {}) {
+      if (!scope || !key || typeof listener !== "function") {
+        return () => {};
+      }
+
+      const scopeListeners = getScopeListenerMap(scope);
+      let listeners = scopeListeners.get(key);
+      if (!listeners) {
+        listeners = new Set();
+        scopeListeners.set(key, listeners);
+      }
+      listeners.add(listener);
+
+      if (options.applyCurrent !== false) {
+        const currentState = sharedSceneState.get(scope)?.get(key);
+        if (currentState) {
+          listener(currentState);
+        }
+      }
+
+      return () => {
+        listeners.delete(listener);
+        if (!listeners.size) {
+          scopeListeners.delete(key);
+        }
+      };
     },
   };
 }
@@ -1472,6 +1658,10 @@ function applyAvatarPose(parts, rootNode, pose) {
   if (!parts || !rootNode || !pose) return;
   const avatarMode = pose.avatarMode || rootNode.metadata?.avatarMode || "desktop";
 
+  if (typeof pose.speaking === "boolean") {
+    parts.isSpeaking = pose.speaking;
+  }
+
   if (parts.bodyAnchor) {
     parts.bodyAnchor.position.set(0, 0, 0);
     parts.bodyAnchor.rotation.set(0, pose.rootRotY ?? 0, 0);
@@ -1895,7 +2085,7 @@ function createPeerConnection(targetId) {
     console.log("[VOICE] Proximity audio ready for:", targetId);
   };
 
-  
+
   pc.onconnectionstatechange = () => {
     console.log(`[VOICE] ${targetId} state:`, pc.connectionState);
 
@@ -1912,11 +2102,12 @@ function createPeerConnection(targetId) {
   return pc;
 }
 
-socket.on("init", async ({ selfId: id, players, chatMessages }) => {
+socket.on("init", async ({ selfId: id, players, chatMessages, sceneState }) => {
   selfId = id;
   console.log("[NET] init selfId:", selfId);
   logConnectedPlayers("init", players);
   replaceServerChatMessages(chatMessages);
+  replaceSharedSceneState(sceneState);
 
   if (!sceneRef) return;
 
@@ -1930,6 +2121,14 @@ socket.on("init", async ({ selfId: id, players, chatMessages }) => {
 
 socket.on("chat-message", (message) => {
   addServerChatMessage(message);
+});
+
+socket.on("scene-state-update", ({ scope, key, state }) => {
+  applySharedSceneStateUpdate(scope, key, state);
+});
+
+socket.on("tv-debug-message", (message) => {
+  if (!message) return;
 });
 
 socket.on("playerJoined", async (p) => {
@@ -2003,6 +2202,7 @@ socket.on("playersUpdate", async (players) => {
     applyAvatarPose(mesh.metadata, mesh, {
       avatarMode: p.avatarMode || "desktop",
       rootRotY: p.root?.rotY ?? 0,
+      speaking: !!p.speaking,
       head: p.head,
       leftHand: p.leftHand,
       rightHand: p.rightHand,
@@ -2147,7 +2347,11 @@ export async function launchApp(options = {}) {
   scene.voiceControls = createVoiceControls();
   scene.audioControls = createAudioControls();
   scene.chatControls = createChatControls();
+  scene.sharedStateControls = createSharedStateControls();
   scene.avatarControls = createAvatarControls();
+  for (const callback of scene._sharedStateReadyCallbacks || []) {
+    callback(scene.sharedStateControls);
+  }
   uiTexture = GUI.AdvancedDynamicTexture.CreateFullscreenUI("nameUI", true, scene);
   applySceneVolume();
   applyPlayerVolume();
@@ -2169,6 +2373,7 @@ export async function launchApp(options = {}) {
     if (!scene.activeCamera) return;
 
     updateLocalVoiceActivity();
+    updateRemoteVoiceActivity();
     updateAllRemoteAudioVolumes();
 
     if (!socket.connected) return;
@@ -2359,6 +2564,7 @@ export async function launchApp(options = {}) {
       name: playerName,
       avatarMode: xrActive ? "vr" : "desktop",
       avatarCustomization: serializeAvatarCustomization(localAvatarCustomization),
+      speaking: !!localAvatarParts?.isSpeaking,
       root: {
         pos: { x: pos.x, y: pos.y, z: pos.z },
         rotY: localAvatarParts?.bodyYaw ?? extractYaw(cam),
