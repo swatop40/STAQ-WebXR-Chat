@@ -23,12 +23,15 @@ const canvas = document.getElementById("renderCanvas");
 if (!canvas) throw new Error("Canvas #renderCanvas not found");
 
 const engine = new BABYLON.Engine(canvas, true);
+const IS_PRODUCTION = import.meta.env.PROD;
+const PLAYER_NAME_MAX_LENGTH = 20;
 
 let sceneRef = null;
 let selfId = null;
 
 const remoteMeshes = new Map();
 const pendingRemoteMeshes = new Map();
+const knownRemotePlayerIds = new Set();
 
 let avatarBodyContainer = null;
 
@@ -47,7 +50,33 @@ function isMobileBrowser() {
 }
 
 function shouldShowDebugLayer() {
-  return !isMobileBrowser();
+  return !IS_PRODUCTION && !isMobileBrowser();
+}
+
+function sanitizeDisplayName(value) {
+  if (typeof value !== "string") return "Player";
+
+  const sanitized = value
+    .replace(/[\u0000-\u001F\u007F]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, PLAYER_NAME_MAX_LENGTH);
+
+  return sanitized || "Player";
+}
+
+function rememberRemotePlayerId(id) {
+  if (typeof id === "string" && id && id !== selfId) {
+    knownRemotePlayerIds.add(id);
+  }
+}
+
+function forgetRemotePlayerId(id) {
+  knownRemotePlayerIds.delete(id);
+}
+
+function isKnownRemotePlayer(id) {
+  return typeof id === "string" && id !== selfId && knownRemotePlayerIds.has(id);
 }
 
 function showRuntimeError(message, error = null) {
@@ -75,7 +104,9 @@ function showRuntimeError(message, error = null) {
     document.body.appendChild(box);
   }
 
-  const details = error?.stack || error?.message || String(error || "");
+  const details = IS_PRODUCTION
+    ? "Check the browser console and server logs for details."
+    : (error?.stack || error?.message || String(error || ""));
   box.textContent = `${message}${details ? `\n${details}` : ""}`;
 }
 
@@ -2027,6 +2058,11 @@ function createPeerConnection(targetId) {
     return null;
   }
 
+  if (!isKnownRemotePlayer(targetId)) {
+    console.warn("[VOICE] BLOCKED unknown peer target:", targetId);
+    return null;
+  }
+
   const existing = peerConnections.get(targetId);
   if (existing) return existing;
 
@@ -2055,7 +2091,7 @@ function createPeerConnection(targetId) {
   }
 
   pc.onicecandidate = (event) => {
-    if (event.candidate) {
+    if (event.candidate && isKnownRemotePlayer(targetId)) {
       socket.emit("webrtc-ice-candidate", {
         targetId,
         candidate: event.candidate,
@@ -2108,12 +2144,15 @@ socket.on("init", async ({ selfId: id, players, chatMessages, sceneState }) => {
   logConnectedPlayers("init", players);
   replaceServerChatMessages(chatMessages);
   replaceSharedSceneState(sceneState);
+  knownRemotePlayerIds.clear();
 
   if (!sceneRef) return;
 
   const otherPlayers = Object.values(players || {}).filter(
     (p) => p?.id && p.id !== selfId
   );
+
+  otherPlayers.forEach((p) => rememberRemotePlayerId(p.id));
 
   await Promise.all(otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id)));
   logConnectedPlayers("after init");
@@ -2134,6 +2173,7 @@ socket.on("tv-debug-message", (message) => {
 socket.on("playerJoined", async (p) => {
   if (!sceneRef || !p?.id || p.id === selfId) return;
   console.log("[NET] playerJoined:", p.id);
+  rememberRemotePlayerId(p.id);
 
   await ensureRemoteMesh(sceneRef, p.id);
   updateRemoteAudioVolume(p.id);
@@ -2161,6 +2201,7 @@ socket.on("playerJoined", async (p) => {
 
 socket.on("playerLeft", (id) => {
   console.log("[NET] playerLeft:", id);
+  forgetRemotePlayerId(id);
   removeRemoteMesh(id);
   cleanupRemoteAudio(id);
   removePeerConnection(id);
@@ -2170,8 +2211,12 @@ socket.on("playerLeft", (id) => {
 socket.on("playersUpdate", async (players) => {
   if (!sceneRef || !players) return;
 
+  const incomingIds = new Set();
+
   for (const [id, p] of Object.entries(players)) {
     if (id === selfId) continue;
+    incomingIds.add(id);
+    rememberRemotePlayerId(id);
 
     let mesh = remoteMeshes.get(id);
 
@@ -2210,10 +2255,20 @@ socket.on("playersUpdate", async (players) => {
 
     updateRemoteAudioVolume(id);
   }
+
+  for (const id of [...knownRemotePlayerIds]) {
+    if (!incomingIds.has(id)) {
+      forgetRemotePlayerId(id);
+    }
+  }
 });
 
 socket.on("webrtc-offer", async ({ fromId, offer }) => {
   try {
+    if (!isKnownRemotePlayer(fromId) || !offer?.sdp || offer.type !== "offer") {
+      return;
+    }
+
     console.log("[VOICE] Received offer from:", fromId);
 
     const pc = createPeerConnection(fromId);
@@ -2240,6 +2295,10 @@ socket.on("webrtc-offer", async ({ fromId, offer }) => {
 
 socket.on("webrtc-answer", async ({ fromId, answer }) => {
   try {
+    if (!isKnownRemotePlayer(fromId) || !answer?.sdp || answer.type !== "answer") {
+      return;
+    }
+
     console.log("[VOICE] Received answer from:", fromId);
 
     const pc = peerConnections.get(fromId);
@@ -2258,6 +2317,10 @@ socket.on("webrtc-answer", async ({ fromId, answer }) => {
 
 socket.on("webrtc-ice-candidate", async ({ fromId, candidate }) => {
   try {
+    if (!isKnownRemotePlayer(fromId) || !candidate?.candidate) {
+      return;
+    }
+
     const pc = peerConnections.get(fromId);
     if (!pc || !candidate) return;
 
@@ -2293,7 +2356,7 @@ export async function launchApp(options = {}) {
   appStarted = true;
 
   if (options.playerName) {
-    playerName = options.playerName;
+    playerName = sanitizeDisplayName(options.playerName);
   }
   if (!localAvatarCustomization) {
     localAvatarCustomization = createDefaultAvatarCustomization(playerName);
@@ -2375,12 +2438,6 @@ export async function launchApp(options = {}) {
     updateLocalVoiceActivity();
     updateRemoteVoiceActivity();
     updateAllRemoteAudioVolumes();
-
-    if (!socket.connected) return;
-
-    const now = performance.now();
-    if (now - lastSend < 1000 / SEND_HZ) return;
-    lastSend = now;
 
     const cam = scene.activeCamera;
     const xrActive =
@@ -2560,6 +2617,12 @@ export async function launchApp(options = {}) {
       });
     }
 
+    if (!socket.connected) return;
+
+    const now = performance.now();
+    if (now - lastSend < 1000 / SEND_HZ) return;
+    lastSend = now;
+
     socket.emit("pose", {
       name: playerName,
       avatarMode: xrActive ? "vr" : "desktop",
@@ -2587,7 +2650,7 @@ const nameInput = document.getElementById("nameInput");
 const joinButton = document.getElementById("joinButton");
 
 async function handleJoin() {
-  const enteredName = nameInput.value.trim();
+  const enteredName = sanitizeDisplayName(nameInput.value);
   playerName = enteredName || `Player-${Math.floor(Math.random() * 1000)}`;
   localAvatarCustomization = createDefaultAvatarCustomization(playerName);
 

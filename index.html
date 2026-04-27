@@ -101,12 +101,22 @@
     <canvas id="renderCanvas"></canvas>
     <script type="module">
       const joinButton = document.getElementById("joinButton");
-       const nameInput = document.getElementById("nameInput");
+      const nameInput = document.getElementById("nameInput");
 
-       joinButton.addEventListener("click", () => {
-     sessionStorage.setItem("nameInput", nameInput.value || "Player");
-     window.location.href = "choose-scene.html";
-});
-</script>
+      function sanitizeName(value) {
+        const sanitized = String(value || "")
+          .replace(/[\u0000-\u001F\u007F]/g, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 20);
+
+        return sanitized || "Player";
+      }
+
+      joinButton.addEventListener("click", () => {
+        sessionStorage.setItem("nameInput", sanitizeName(nameInput.value));
+        window.location.href = "choose-scene.html";
+      });
+    </script>
   </body>
 </html>

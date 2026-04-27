@@ -107,6 +107,16 @@
         parking: loadParkingScene,
       };
 
+      function sanitizeName(value) {
+        const sanitized = String(value || "")
+          .replace(/[\u0000-\u001F\u007F]/g, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 20);
+
+        return sanitized || "Player";
+      }
+
       buttons.forEach((btn) => {
         btn.addEventListener("click", async () => {
           const sceneKey = btn.dataset.scene;
@@ -121,7 +131,7 @@
           overlay.style.display = "none";
 
           await launchApp({
-            playerName: sessionStorage.getItem("nameInput") || "Player",
+            playerName: sanitizeName(sessionStorage.getItem("nameInput")),
           });
         });
       });

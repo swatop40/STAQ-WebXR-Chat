@@ -6,8 +6,9 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "preview": "vite preview",
-    "server": "node server/server.js"
+    "preview": "vite preview --host 0.0.0.0",
+    "server": "node server/server.js",
+    "start": "node server/server.js"
   },
   "devDependencies": {
     "vite": "^7.2.4",
