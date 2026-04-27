@@ -533,6 +533,42 @@ const BAR_SCENE_OBJECTS = [
       padding: new Vector3(0.1, 0.08, 0.1),
     },
   },
+  {
+    fileName: "chair.glb",
+    position: new Vector3(4.5, 1.5, -3),
+    rotation: new Vector3(0, 0.5916666164260777, 0),
+    scaling: new Vector3(0.5, 0.5, 0.5),
+    staticCollider: {
+      padding: new Vector3(0.1, 0.08, 0.1),
+    },
+  },
+  {
+    fileName: "chair.glb",
+    position: new Vector3(7, 1.5, 5),
+    rotation: new Vector3(0, 5.206317158699085, 0),
+    scaling: new Vector3(0.5, 0.5, 0.5),
+    staticCollider: {
+      padding: new Vector3(0.1, 0.08, 0.1),
+    },
+  },
+  {
+    fileName: "chair.glb",
+    position: new Vector3(8, 1.5, 3),
+    rotation: new Vector3(0, 0.11868238913561441, 0),
+    scaling: new Vector3(0.5, 0.5, 0.5),
+    staticCollider: {
+      padding: new Vector3(0.1, 0.08, 0.1),
+    },
+  },
+  {
+    fileName: "chair.glb",
+    position: new Vector3(5, 1.5, -8),
+    rotation: new Vector3(0, 0.29670597283903605, 0),
+    scaling: new Vector3(0.5, 0.5, 0.5),
+    staticCollider: {
+      padding: new Vector3(0.1, 0.08, 0.1),
+    },
+  },
 ];
 
 export async function startScene(engine) {
