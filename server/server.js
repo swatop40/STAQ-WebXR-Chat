@@ -151,7 +151,7 @@ function clearDisconnectedOwnership(disconnectedId) {
         updatedAt: Date.now(),
       };
 
-      io.emit("scene-state-update", {
+      io.to(players.get(disconnectedId)?.room).emit("scene-state-update", {
         scope,
         key,
         state: sceneState[scope][key],
@@ -225,6 +225,8 @@ function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
   
+  socket.emit("sceneCounts", getSceneCounts());
+
   socket.join("lobby");
   socket.currentRoom = "lobby";
 
@@ -258,12 +260,11 @@ io.on("connection", (socket) => {
       const player = players.get(socket.id);
       if (!player) return;
 
-      const counts = getSceneCounts();
       const max = SCENE_CAPACITY[sceneId] || 9999;
 
-      
+      const currentCount = [...players.values()].filter(p => p.room === sceneId).length;
 
-      if ((counts[sceneId] || 0) >= max) {
+      if (currentCount >= max) {
         socket.emit("sceneFull", { sceneId, max });
         return;
       }
@@ -289,8 +290,6 @@ io.on("connection", (socket) => {
       socket.to(sceneId).emit("playerJoined", player);
       broadcastSceneCounts();
     });
-
-  socket.to(socket.currentRoom).emit("playerJoined", players.get(socket.id));
 
   socket.on("pose", (data) => {
   const p = players.get(socket.id);
@@ -438,7 +437,7 @@ io.on("connection", (socket) => {
 
   socket.on("tv-debug-message", (payload) => {
     const player = players.get(socket.id);
-    io.emit("tv-debug-message", {
+    io.to(player.room).emit("tv-debug-message", {
       tvKey: typeof payload?.tvKey === "string" ? payload.tvKey.slice(0, 120) : "",
       senderId: socket.id,
       senderName: player?.name || "Player",

@@ -112,13 +112,12 @@
 
       const socket = io();
 
-      socket.on("sceneCounts", (counts) => {
-        const max = 3;
-
-        socket.on("sceneFull", ({ sceneId, max }) => {
+      socket.on("sceneFull", ({ sceneId, max }) => {
         alert(`The ${sceneId} scene is full (${max} players). Please choose another scene.`);
       });
 
+      socket.on("sceneCounts", (counts) => {
+      const max = 3;
 
         const scenes = ["start", "bar", "parking"];
         scenes.forEach((scene) => {
@@ -158,13 +157,27 @@
             button.disabled = true;
           });
 
-          setSceneLoader(loadScene);
-          overlay.style.display = "none";
+          socket.emit("joinScene", sceneKey);
 
-          await launchApp({
+         
+          socket.once("init", async (initData) => {
+            setSceneLoader(loadScene);
+            overlay.style.display = "none";
+
+            await launchApp({
               playerName: sessionStorage.getItem("nameInput") || "Player",
               sceneId: sceneKey,
+              initData, 
             });
+          });
+
+          socket.once("sceneFull", ({ sceneId, max }) => {
+            alert(`The ${sceneId} scene is full (${max} players). Please choose another scene.`);
+            
+            buttons.forEach((button) => {
+              button.disabled = false;
+            });
+          });
         });
       });
     </script>

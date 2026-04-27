@@ -1725,6 +1725,10 @@ async function ensureRemoteMesh(scene, id) {
   const pending = pendingRemoteMeshes.get(id);
   if (pending) return await pending;
 
+  if (remoteMeshes.has(id)) {
+  return remoteMeshes.get(id);
+}
+
   const creationPromise = (async () => {
     await loadAvatarTemplates(scene);
 
@@ -2111,11 +2115,18 @@ socket.on("init", async ({ selfId: id, players, chatMessages, sceneState }) => {
 
   if (!sceneRef) return;
 
-  const otherPlayers = Object.values(players || {}).filter(
-  (p) => p && p.id && p.id !== selfId
-);
+  for (const [id, mesh] of remoteMeshes.entries()) {
+  mesh.dispose?.();
+}
+remoteMeshes.clear();
 
-  await Promise.all(otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id)));
+const otherPlayers = Object.values(players || {}).filter(
+      (p) => p && p.id && p.id !== selfId
+    );
+
+    await Promise.all(
+      otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id))
+    );
   logConnectedPlayers("after init");
 });
 
@@ -2369,7 +2380,6 @@ export async function launchApp(options = {}) {
   await ensureLocalAvatar(scene);
 
   socket.connect();
-  socket.emit("joinScene", options.sceneId || "start");
 
   if (shouldShowDebugLayer()) {
     scene.debugLayer.show();
