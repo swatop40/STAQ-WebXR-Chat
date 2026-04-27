@@ -15,6 +15,17 @@ const io = new Server(httpServer, {
 });
 
 const players = new Map();
+const chatMessages = [];
+const MAX_CHAT_MESSAGES = 40;
+const SCENE_STATE_SCOPES = new Set(["object", "dart", "dartGame", "tv", "picture"]);
+const sceneState = {
+  object: {},
+  dart: {},
+  dartGame: {},
+  tv: {},
+  picture: {},
+};
+const tvDebugPlaybackByKey = new Map();
 const karaokeSongsDir = path.resolve(process.cwd(), "public", "karaoke-songs");
 const supportedKaraokeExtensions = new Set([".mp4", ".webm", ".mov", ".m4v"]);
 
@@ -52,6 +63,136 @@ function makeSpawn() {
   return { x: (Math.random() - 0.5) * 2, y: 1.6, z: (Math.random() - 0.5) * 2 };
 }
 
+function sanitizeChatText(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+}
+
+function sanitizeSceneStateValue(value, depth = 0) {
+  if (depth > 6) return null;
+
+  if (
+    value == null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, 64)
+      .map((entry) => sanitizeSceneStateValue(entry, depth + 1));
+  }
+
+  if (typeof value === "object") {
+    const next = {};
+    for (const [key, entry] of Object.entries(value).slice(0, 64)) {
+      next[key] = sanitizeSceneStateValue(entry, depth + 1);
+    }
+    return next;
+  }
+
+  return null;
+}
+
+function sanitizeSceneStateUpdate(payload) {
+  if (!payload || typeof payload !== "object") return null;
+
+  const scope = typeof payload.scope === "string" ? payload.scope : "";
+  const key = typeof payload.key === "string" ? payload.key.slice(0, 120) : "";
+  if (!SCENE_STATE_SCOPES.has(scope) || !key) return null;
+
+  const state = sanitizeSceneStateValue(payload.state);
+  if (!state || typeof state !== "object") return null;
+
+  return { scope, key, state };
+}
+
+function applySceneStateUpdate({ scope, key, state }, actorId = null) {
+  const current = sceneState[scope][key] || {};
+  const next = {
+    ...current,
+    ...state,
+    updatedAt: Date.now(),
+  };
+
+  if (actorId) {
+    next.lastActorId = actorId;
+  }
+
+  sceneState[scope][key] = next;
+  return next;
+}
+
+function clearDisconnectedOwnership(disconnectedId) {
+  for (const scope of ["object", "dart"]) {
+    for (const [key, state] of Object.entries(sceneState[scope])) {
+      if (state?.ownerId !== disconnectedId) continue;
+
+      sceneState[scope][key] = {
+        ...state,
+        ownerId: null,
+        isHeld: false,
+        updatedAt: Date.now(),
+      };
+
+      io.emit("scene-state-update", {
+        scope,
+        key,
+        state: sceneState[scope][key],
+      });
+    }
+  }
+}
+
+function resetSharedRoomState() {
+  chatMessages.length = 0;
+  sceneState.object = {};
+  sceneState.dart = {};
+  sceneState.dartGame = {};
+  sceneState.tv = {};
+  sceneState.picture = {};
+  tvDebugPlaybackByKey.clear();
+}
+
+function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
+  if (update?.scope !== "tv" || !update.key || !nextState) return;
+
+  const isPlaying = !!nextState.currentTrack?.url && nextState.paused === false;
+  const previousSignature = tvDebugPlaybackByKey.get(update.key) || null;
+  const nextSignature = isPlaying
+    ? `${nextState.currentTrack.url}|${nextState.paused === false ? "playing" : "paused"}`
+    : null;
+
+  if (previousSignature === nextSignature) return;
+
+  if (nextSignature) {
+    tvDebugPlaybackByKey.set(update.key, nextSignature);
+  } else {
+    tvDebugPlaybackByKey.delete(update.key);
+  }
+
+  if (!isPlaying) return;
+
+  const player = players.get(socketId);
+  io.emit("tv-debug-message", {
+    tvKey: update.key,
+    senderId: socketId,
+    senderName: player?.name || "Player",
+    title: nextState.currentTrack.title || "Unknown Song",
+    url: nextState.currentTrack.url || null,
+    action: "play",
+    createdAt: Date.now(),
+  });
+}
+
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
 
@@ -61,6 +202,7 @@ io.on("connection", (socket) => {
   room: "lobby",
   avatarMode: "desktop",
   avatarCustomization: null,
+  speaking: false,
   root: {
     pos: makeSpawn(),
     rotY: 0,
@@ -83,6 +225,8 @@ io.on("connection", (socket) => {
   socket.emit("init", {
     selfId: socket.id,
     players: Object.fromEntries(players),
+    chatMessages,
+    sceneState,
   });
 
   socket.broadcast.emit("playerJoined", players.get(socket.id));
@@ -97,6 +241,10 @@ io.on("connection", (socket) => {
 
   if (data.avatarMode === "vr" || data.avatarMode === "desktop") {
     p.avatarMode = data.avatarMode;
+  }
+
+  if (typeof data.speaking === "boolean") {
+    p.speaking = data.speaking;
   }
 
   if (data.avatarCustomization && typeof data.avatarCustomization === "object") {
@@ -182,6 +330,63 @@ io.on("connection", (socket) => {
   }
 });
 
+  socket.on("chat-message", ({ text }) => {
+    const player = players.get(socket.id);
+    const cleanText = sanitizeChatText(text);
+    if (!player || !cleanText) return;
+
+    const message = {
+      id: `${Date.now()}-${socket.id}`,
+      senderId: socket.id,
+      senderName: player.name || "Player",
+      text: cleanText,
+      createdAt: Date.now(),
+    };
+
+    chatMessages.push(message);
+    while (chatMessages.length > MAX_CHAT_MESSAGES) {
+      chatMessages.shift();
+    }
+
+    io.emit("chat-message", message);
+  });
+
+  socket.on("scene-state-update", (payload, ack) => {
+    const update = sanitizeSceneStateUpdate(payload);
+    if (!update) {
+      ack?.({ ok: false, reason: "invalid-update" });
+      return;
+    }
+
+    const nextState = applySceneStateUpdate(update, socket.id);
+    maybeBroadcastTVDebugMessage(socket.id, update, nextState);
+    io.emit("scene-state-update", {
+      scope: update.scope,
+      key: update.key,
+      state: nextState,
+    });
+    ack?.({
+      ok: true,
+      scope: update.scope,
+      key: update.key,
+      lastActorId: nextState.lastActorId || null,
+      updatedAt: nextState.updatedAt || null,
+    });
+  });
+
+  socket.on("tv-debug-message", (payload) => {
+    const player = players.get(socket.id);
+    io.emit("tv-debug-message", {
+      tvKey: typeof payload?.tvKey === "string" ? payload.tvKey.slice(0, 120) : "",
+      senderId: socket.id,
+      senderName: player?.name || "Player",
+      title: typeof payload?.title === "string" ? payload.title.slice(0, 240) : "Unknown Song",
+      url: typeof payload?.url === "string" ? payload.url : null,
+      action: typeof payload?.action === "string" ? payload.action : "play",
+      createdAt: Date.now(),
+    });
+  });
+
 //WEBRTC SIGNALING
 
 // When a player sends a WebRTC offer
@@ -211,6 +416,10 @@ io.on("connection", (socket) => {
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
     players.delete(socket.id);
+    clearDisconnectedOwnership(socket.id);
+    if (players.size === 0) {
+      resetSharedRoomState();
+    }
     io.emit("playerLeft", socket.id);
   });
 });

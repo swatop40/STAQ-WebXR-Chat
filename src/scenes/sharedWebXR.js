@@ -27,6 +27,7 @@ export const DEFAULT_XR_SETTINGS = {
   desktopSprintSpeed: 8.4,
   desktopLookSensitivity: 1,
   xrMoveSpeed: 3.6,
+  playerStepHeight: 0.28,
   xrMoveDeadzone: 0.18,
   xrTurnMode: "snap",
   xrSmoothTurnSpeed: 1.8,
@@ -97,6 +98,21 @@ function worldToLocalPosition(node, worldPos) {
   const inv = node.getWorldMatrix().clone();
   inv.invert();
   return Vector3.TransformCoordinates(worldPos, inv);
+}
+
+function registerSharedStateReady(scene, callback) {
+  if (!scene || typeof callback !== "function") return;
+
+  if (scene.sharedStateControls) {
+    callback(scene.sharedStateControls);
+    return;
+  }
+
+  if (!scene._sharedStateReadyCallbacks) {
+    scene._sharedStateReadyCallbacks = [];
+  }
+
+  scene._sharedStateReadyCallbacks.push(callback);
 }
 
 function setupMirror(scene, mirror) {
@@ -180,6 +196,71 @@ function setupDartInteractions(scene, xr, options = {}) {
     { maxRadius: 0.78, points: 20, label: "Outer Red" },
     { maxRadius: 1.05, points: 10, label: "Outer Gray" },
   ];
+  const dartLastSyncAt = new Map();
+  let applyingRemoteDartGameState = false;
+
+  function getDartStateKey(root) {
+    return root?.name || null;
+  }
+
+  function serializeQuaternion(quaternion) {
+    return quaternion
+      ? { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
+      : null;
+  }
+
+  function serializeVector3(vector) {
+    return vector
+      ? { x: vector.x, y: vector.y, z: vector.z }
+      : null;
+  }
+
+  function serializeDartTransform(root, overrides = {}) {
+    if (!root) return null;
+
+    const matrix = root.computeWorldMatrix(true);
+    const scaling = new Vector3();
+    const rotation = new Quaternion();
+    const position = new Vector3();
+    matrix.decompose(scaling, rotation, position);
+
+    return {
+      position: serializeVector3(position),
+      rotation: serializeQuaternion(rotation),
+      scaling: serializeVector3(scaling),
+      enabled: root.isEnabled(),
+      isPickable: !!root.isPickable,
+      isHeld: !!root.metadata?.isHeld,
+      ownerId: overrides.ownerId ?? root.metadata?.heldBy ?? null,
+      ...overrides,
+    };
+  }
+
+  function emitDartState(root, overrides = {}, force = false) {
+    const key = getDartStateKey(root);
+    const controls = scene.sharedStateControls;
+    if (!key || !controls) return;
+
+    const now = performance.now();
+    if (!force && now - (dartLastSyncAt.get(key) || 0) < 80) return;
+    dartLastSyncAt.set(key, now);
+    controls.emit("dart", key, serializeDartTransform(root, overrides));
+  }
+
+  function emitDartGameState(force = false) {
+    if (applyingRemoteDartGameState) return;
+
+    scene.sharedStateControls?.emit("dartGame", "default", {
+      activePlayer: dartScore.activePlayer,
+      turnThrows: dartScore.turnThrows,
+      throwsPerTurn: dartScore.throwsPerTurn,
+      gameOver: dartScore.gameOver,
+      players: dartScore.players.map((player) => ({ ...player })),
+      hitText: dartScore.hitText?.text || "Ready",
+      statusText: dartScore.statusText?.text || "Player 1 throws",
+      force: !!force,
+    });
+  }
 
   function isSuppressedInteractionMesh(mesh) {
     let current = mesh;
@@ -593,6 +674,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     }
 
     updateDartGameDisplay("Player 1 throws");
+    emitDartGameState(true);
     console.log("[DART] Game restarted");
   }
 
@@ -609,6 +691,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     const player = dartScore.players[dartScore.activePlayer];
     const throwLabel = `Dart ${dartScore.turnThrows + 1}/${dartScore.throwsPerTurn}`;
     dartScore.statusText.text = status || `${player.name} throws\n${throwLabel}`;
+    emitDartGameState();
   }
 
   function findDartBoardRoot() {
@@ -719,6 +802,11 @@ function setupDartInteractions(scene, xr, options = {}) {
 
     root.setParent(null);
     recordDartBoardScore(root, boardRoot, pick);
+    emitDartState(root, {
+      isHeld: false,
+      ownerId: null,
+      isPickable: false,
+    }, true);
     console.log("[DART] Stuck to dart board");
     return true;
   }
@@ -748,6 +836,11 @@ function setupDartInteractions(scene, xr, options = {}) {
         .add(lift)
     );
     setDartPickable(root, true);
+    emitDartState(root, {
+      isHeld: false,
+      ownerId: null,
+      isPickable: true,
+    }, true);
     console.log("[DART] Hit scene collider");
     return true;
   }
@@ -805,6 +898,12 @@ function setupDartInteractions(scene, xr, options = {}) {
     root.setParent(holder);
     root.position.set(0.035, -0.025, 0.09);
     root.rotationQuaternion = Quaternion.FromEulerAngles(Math.PI / 2, 0, 0);
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: true,
+      heldBy: scene.sharedStateControls?.getSelfId?.() || controller.uniqueId || "xr",
+    };
+    emitDartState(root, { isHeld: true, ownerId: root.metadata.heldBy, isPickable: false }, true);
     return true;
   }
 
@@ -836,10 +935,16 @@ function setupDartInteractions(scene, xr, options = {}) {
     root.setParent(anchor);
     root.position.set(0.36, -0.42, 1.05);
     root.rotationQuaternion = desktopHeldDartRotation;
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: true,
+      heldBy: scene.sharedStateControls?.getSelfId?.() || "desktop",
+    };
     desktopHold.root = root;
     desktopHold.viewRoot = viewRoot;
     desktopHold.charging = false;
     desktopHold.chargeStartedAt = 0;
+    emitDartState(root, { isHeld: true, ownerId: root.metadata.heldBy, isPickable: false }, true);
     return true;
   }
 
@@ -854,6 +959,11 @@ function setupDartInteractions(scene, xr, options = {}) {
     root.position.copyFrom(worldPos);
     alignDartWithVelocity(root, velocity);
     setDartPickable(root, true);
+    root.metadata = {
+      ...(root.metadata || {}),
+      isHeld: false,
+      heldBy: null,
+    };
     registerDartThrow(root);
 
     const impostor = ensureDartPhysics(root);
@@ -861,6 +971,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     impostor.setAngularVelocity(Vector3.Zero());
     flyingDarts.add(root);
     dartFlightPositions.set(root, worldPos.clone());
+    emitDartState(root, { isHeld: false, ownerId: null, isPickable: true }, true);
   }
 
   function releaseDesktopDart(root, velocity) {
@@ -931,6 +1042,86 @@ function setupDartInteractions(scene, xr, options = {}) {
     return Math.min((performance.now() - desktopHold.chargeStartedAt) / desktopChargeMaxMs, 1);
   }
 
+  function isAnyObjectHeld() {
+    return !!scene.objectInteractionState?.desktopHold?.root ||
+      (scene.objectInteractionState?.xrHeldObjects?.size || 0) > 0;
+  }
+
+  registerSharedStateReady(scene, (controls) => {
+    const seenDarts = new Set();
+    for (const mesh of scene.meshes) {
+      const root = getDartRoot(mesh);
+      if (!root || seenDarts.has(root)) continue;
+      seenDarts.add(root);
+      const key = getDartStateKey(root);
+      if (!key) continue;
+
+      controls.subscribe("dart", key, (state) => {
+        if (
+          !state ||
+          state.ownerId === controls.getSelfId?.() ||
+          state.lastActorId === controls.getSelfId?.()
+        ) return;
+        if (root === desktopHold.root) return;
+        if ([...xrHeldDarts.values()].includes(root)) return;
+
+        disposeDartPhysics(root);
+        flyingDarts.delete(root);
+        dartFlightPositions.delete(root);
+        root.setParent(null);
+
+        if (state.position) {
+          root.position.copyFromFloats(state.position.x || 0, state.position.y || 0, state.position.z || 0);
+        }
+        if (state.rotation) {
+          root.rotationQuaternion = new Quaternion(
+            state.rotation.x || 0,
+            state.rotation.y || 0,
+            state.rotation.z || 0,
+            state.rotation.w || 1
+          );
+        }
+        if (state.scaling) {
+          root.scaling.copyFromFloats(state.scaling.x || 1, state.scaling.y || 1, state.scaling.z || 1);
+        } else {
+          restoreDartBaseScale(root);
+        }
+
+        setDartVisible(root, state.enabled !== false);
+        setDartPickable(root, state.isPickable !== false);
+        root.metadata = {
+          ...(root.metadata || {}),
+          isHeld: !!state.isHeld,
+          heldBy: state.ownerId || null,
+        };
+      });
+    }
+
+    controls.subscribe("dartGame", "default", (state) => {
+      if (!state || !Array.isArray(state.players)) return;
+
+      applyingRemoteDartGameState = true;
+      try {
+        dartScore.activePlayer = Number.isFinite(state.activePlayer) ? state.activePlayer : 0;
+        dartScore.turnThrows = Number.isFinite(state.turnThrows) ? state.turnThrows : 0;
+        dartScore.throwsPerTurn = Number.isFinite(state.throwsPerTurn)
+          ? state.throwsPerTurn
+          : dartScore.throwsPerTurn;
+        dartScore.gameOver = !!state.gameOver;
+        dartScore.players = state.players.map((player, index) => ({
+          name: player?.name || `Player ${index + 1}`,
+          remaining: Number.isFinite(player?.remaining) ? player.remaining : 300,
+        }));
+        if (dartScore.hitText && typeof state.hitText === "string") {
+          dartScore.hitText.text = state.hitText;
+        }
+        updateDartGameDisplay(typeof state.statusText === "string" ? state.statusText : null);
+      } finally {
+        applyingRemoteDartGameState = false;
+      }
+    });
+  });
+
   initializeDartGameDisplay();
 
   scene.onPointerObservable.add((pointerInfo) => {
@@ -938,10 +1129,12 @@ function setupDartInteractions(scene, xr, options = {}) {
 
     const button = pointerInfo.event?.button;
     if (button != null && button !== 0) return;
+    if (scene.isPointerOverSceneUI?.()) return;
     if (isSuppressedInteractionMesh(pointerInfo.pickInfo?.pickedMesh)) return;
 
     if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
       if (!desktopHold.root) {
+        if (isAnyObjectHeld()) return;
         const dart = pickDesktopDart();
         if (dart) {
           holdDartOnDesktop(dart);
@@ -1001,6 +1194,15 @@ function setupDartInteractions(scene, xr, options = {}) {
 
       alignDartWithVelocity(dart, velocity);
       dart.physicsImpostor?.setAngularVelocity(Vector3.Zero());
+      emitDartState(dart);
+    }
+
+    if (desktopHold.root) {
+      emitDartState(desktopHold.root);
+    }
+
+    for (const root of xrHeldDarts.values()) {
+      emitDartState(root);
     }
   });
 
@@ -1030,6 +1232,11 @@ function setupDartInteractions(scene, xr, options = {}) {
 
       addControllerMotionSample(controller, controllerId);
 
+      if (!xrHeldDarts.has(controllerId) && isAnyObjectHeld()) {
+        xrGripStates.set(controllerId, isPressed);
+        continue;
+      }
+
       if (isPressed && !wasPressed && !xrHeldDarts.has(controllerId)) {
         const ray = getControllerRay(controller);
         const dart = ray ? pickDartWithRay(ray) : null;
@@ -1054,15 +1261,41 @@ function setupObjectInteractions(scene, xr) {
   const desktopHold = {
     root: null,
     anchor: null,
+    charging: false,
+    chargeStartedAt: 0,
   };
+  const desktopHoldBasePosition = new Vector3(0.34, -0.30, 1.05);
+  const desktopHoldBaseRotation = Quaternion.Identity();
   const xrGripStates = new Map();
   const xrTriggerStates = new Map();
   const xrHeldObjects = new Map();
+  const xrMotionSamples = new Map();
+  const desktopChargeMaxMs = 1400;
+  const desktopMinThrowSpeed = 2.4;
+  const desktopMaxThrowSpeed = 9.5;
+  const xrDropSpeedThreshold = 1.2;
+  const objectLastSyncAt = new Map();
 
   scene.objectInteractionState = {
     desktopHold,
     xrHeldObjects,
   };
+
+  function getObjectStateKey(root) {
+    return root?.name || null;
+  }
+
+  function serializeQuaternion(quaternion) {
+    return quaternion
+      ? { x: quaternion.x, y: quaternion.y, z: quaternion.z, w: quaternion.w }
+      : null;
+  }
+
+  function serializeVector3(vector) {
+    return vector
+      ? { x: vector.x, y: vector.y, z: vector.z }
+      : null;
+  }
 
   function getSceneInteractableRoot(mesh) {
     let current = mesh;
@@ -1116,6 +1349,23 @@ function setupObjectInteractions(scene, xr) {
 
     direction.normalize();
     return new Ray(origin, direction, 6);
+  }
+
+  function addControllerMotionSample(controller, controllerId) {
+    const holder = controller.grip || controller.pointer;
+    if (!holder) return;
+
+    const samples = xrMotionSamples.get(controllerId) || [];
+    samples.push({
+      time: performance.now(),
+      position: holder.getAbsolutePosition().clone(),
+    });
+
+    while (samples.length > 8) {
+      samples.shift();
+    }
+
+    xrMotionSamples.set(controllerId, samples);
   }
 
   function isGripPressed(controller) {
@@ -1180,6 +1430,143 @@ function setupObjectInteractions(scene, xr) {
     return { scaling, rotation, position };
   }
 
+  function emitObjectState(root, overrides = {}, force = false) {
+    const controls = scene.sharedStateControls;
+    const key = getObjectStateKey(root);
+    if (!controls || !key || !root) return;
+
+    const now = performance.now();
+    if (!force && now - (objectLastSyncAt.get(key) || 0) < 80) return;
+    objectLastSyncAt.set(key, now);
+
+    const world = captureWorldTransform(root);
+    controls.emit("object", key, {
+      position: serializeVector3(world.position),
+      rotation: serializeQuaternion(world.rotation),
+      scaling: serializeVector3(world.scaling),
+      enabled: root.isEnabled(),
+      isPickable: !!root.isPickable,
+      isHeld: !!root.metadata?.isHeld,
+      ownerId: overrides.ownerId ?? root.metadata?.heldBy ?? null,
+      ...overrides,
+    });
+  }
+
+  function getDesktopChargeAmount() {
+    if (!desktopHold.charging) return 0;
+    return Math.min((performance.now() - desktopHold.chargeStartedAt) / desktopChargeMaxMs, 1);
+  }
+
+  function isAnyDartHeld() {
+    return !!scene.dartInteractionState?.desktopHold?.root ||
+      (scene.dartInteractionState?.xrHeldDarts?.size || 0) > 0;
+  }
+
+  function isAnyObjectHeld() {
+    return !!scene.objectInteractionState?.desktopHold?.root ||
+      (scene.objectInteractionState?.xrHeldObjects?.size || 0) > 0;
+  }
+
+  function getControllerReleaseVelocity(controllerId, controller) {
+    const samples = xrMotionSamples.get(controllerId) || [];
+    const latest = samples[samples.length - 1];
+    let previous = null;
+
+    if (!latest) {
+      const ray = getControllerRay(controller);
+      return ray ? ray.direction.scale(xrDropSpeedThreshold) : Vector3.Zero();
+    }
+
+    for (let i = samples.length - 2; i >= 0; i -= 1) {
+      if (latest.time - samples[i].time >= 45) {
+        previous = samples[i];
+        break;
+      }
+    }
+
+    if (latest && previous) {
+      const dt = Math.max((latest.time - previous.time) / 1000, 0.001);
+      return latest.position.subtract(previous.position).scale(1 / dt);
+    }
+
+    return Vector3.Zero();
+  }
+
+  function captureRootBounds(root) {
+    root.computeWorldMatrix(true);
+    const bounds = root.getHierarchyBoundingVectors?.(true);
+    if (!bounds?.min || !bounds?.max) return null;
+
+    const center = bounds.min.add(bounds.max).scale(0.5);
+    const size = bounds.max.subtract(bounds.min);
+    return { center, size };
+  }
+
+  function disposeHeldObjectPhysics(root) {
+    const collider = root?.metadata?.dropPhysicsCollider;
+    if (collider?.physicsImpostor) {
+      collider.physicsImpostor.dispose();
+      collider.physicsImpostor = null;
+    }
+    collider?.dispose?.(false, false);
+
+    if (root?.metadata) {
+      root.metadata.dropPhysicsCollider = null;
+      root.metadata.dropPhysicsOffset = null;
+      root.metadata.dropPhysicsActive = false;
+    }
+  }
+
+  function ensureHeldObjectPhysics(root) {
+    if (!root) return null;
+
+    let collider = root.metadata?.dropPhysicsCollider;
+    if (!collider) {
+      const worldTransform = captureWorldTransform(root);
+      const bounds = captureRootBounds(root);
+      if (!bounds) return null;
+
+      collider = MeshBuilder.CreateBox(
+        `${root.name || "heldObject"}_dropCollider`,
+        {
+          width: Math.max(bounds.size.x + 0.04, 0.05),
+          height: Math.max(bounds.size.y + 0.04, 0.05),
+          depth: Math.max(bounds.size.z + 0.04, 0.05),
+        },
+        scene
+      );
+      collider.isVisible = false;
+      collider.isPickable = false;
+      collider.position.copyFrom(bounds.center);
+      collider.rotationQuaternion = worldTransform.rotation.clone();
+
+      const inverseRotation = worldTransform.rotation.clone().normalize();
+      inverseRotation.conjugateInPlace();
+      const inverseRotationMatrix = Matrix.Identity();
+      inverseRotation.toRotationMatrix(inverseRotationMatrix);
+      const localOffset = Vector3.TransformCoordinates(
+        worldTransform.position.subtract(bounds.center),
+        inverseRotationMatrix
+      );
+
+      root.metadata = {
+        ...(root.metadata || {}),
+        dropPhysicsCollider: collider,
+        dropPhysicsOffset: localOffset,
+      };
+    }
+
+    if (!collider.physicsImpostor) {
+      collider.physicsImpostor = new PhysicsImpostor(
+        collider,
+        PhysicsImpostor.BoxImpostor,
+        { mass: 0.35, restitution: 0.05, friction: 0.9 },
+        scene
+      );
+    }
+    return collider.physicsImpostor;
+  }
+
   function getGrabPointLocalTransform(root, mode = "xr") {
     const grabPoint = mode === "desktop"
       ? root.metadata?.desktopGrabPointNode
@@ -1203,7 +1590,25 @@ function setupObjectInteractions(scene, xr) {
     };
   }
 
-  function releaseHeldObject(root) {
+  function getHolderCompensatedScale(root, holder) {
+    const baseLocalScaling = root?.metadata?.baseLocalScaling?.clone?.() || root?.scaling?.clone?.() || Vector3.One();
+    if (!holder?.computeWorldMatrix) {
+      return baseLocalScaling;
+    }
+
+    const holderScaling = new Vector3();
+    const holderRotation = new Quaternion();
+    const holderPosition = new Vector3();
+    holder.computeWorldMatrix(true).decompose(holderScaling, holderRotation, holderPosition);
+
+    return new Vector3(
+      Math.abs(holderScaling.x) > 0.0001 ? baseLocalScaling.x / holderScaling.x : baseLocalScaling.x,
+      Math.abs(holderScaling.y) > 0.0001 ? baseLocalScaling.y / holderScaling.y : baseLocalScaling.y,
+      Math.abs(holderScaling.z) > 0.0001 ? baseLocalScaling.z / holderScaling.z : baseLocalScaling.z
+    );
+  }
+
+  function releaseHeldObject(root, linearVelocity = null, angularVelocity = null) {
     if (!root) return;
 
     const worldTransform = captureWorldTransform(root);
@@ -1211,12 +1616,19 @@ function setupObjectInteractions(scene, xr) {
     root.position.copyFrom(worldTransform.position);
     root.scaling.copyFrom(worldTransform.scaling);
     root.rotationQuaternion = worldTransform.rotation.clone();
+    const physics = ensureHeldObjectPhysics(root);
+    physics?.setLinearVelocity(linearVelocity || Vector3.Zero());
+    physics?.setAngularVelocity(angularVelocity || Vector3.Zero());
+    if (root.metadata) {
+      root.metadata.dropPhysicsActive = true;
+    }
     setInteractablePickable(root, true);
     root.metadata = {
       ...(root.metadata || {}),
       isHeld: false,
       heldBy: null,
     };
+    emitObjectState(root, { isHeld: false, ownerId: null }, true);
   }
 
   function applyHeldTransformFromGrabPoint(root, mode = "xr") {
@@ -1238,21 +1650,46 @@ function setupObjectInteractions(scene, xr) {
     root.rotationQuaternion = inverseRotation;
   }
 
+  function applyDesktopChargeVisual(root, anchor) {
+    if (!root || !anchor) return;
+
+    const charge = getDesktopChargeAmount();
+    anchor.position.set(
+      desktopHoldBasePosition.x,
+      desktopHoldBasePosition.y - 0.06 * charge,
+      desktopHoldBasePosition.z - 0.22 * charge
+    );
+    anchor.rotationQuaternion = Quaternion.FromEulerAngles(
+      -0.08 * charge,
+      0,
+      -0.10 * charge
+    );
+
+    applyHeldTransformFromGrabPoint(root, "desktop");
+    if (charge <= 0) return;
+
+    const chargedRotation = Quaternion.FromEulerAngles(
+      0.22 - charge * 0.42,
+      0,
+      -0.08 - charge * 0.18
+    );
+    root.rotationQuaternion = root.rotationQuaternion.multiply(chargedRotation);
+  }
+
   function holdObject(root, holder, heldBy, mode = "xr") {
     if (!root || !holder || root.metadata?.isHeld || !root.metadata?.pickupEnabled) return false;
 
+    disposeHeldObjectPhysics(root);
     setInteractablePickable(root, false);
     root.parent = holder;
-    const baseLocalScaling = root.metadata?.baseLocalScaling;
-    if (baseLocalScaling) {
-      root.scaling.copyFrom(baseLocalScaling);
-    }
+    root.scaling.copyFrom(getHolderCompensatedScale(root, holder));
     applyHeldTransformFromGrabPoint(root, mode);
     root.metadata = {
       ...(root.metadata || {}),
       isHeld: true,
       heldBy,
     };
+    emitObjectState(root, { isHeld: true, ownerId: heldBy, isPickable: false }, true);
     return true;
   }
 
@@ -1263,12 +1700,14 @@ function setupObjectInteractions(scene, xr) {
     const anchor = desktopHold.anchor || new TransformNode("desktopHeldObjectAnchor", scene);
     desktopHold.anchor = anchor;
     anchor.parent = cam;
-    anchor.position.set(0.34, -0.30, 1.05);
-    anchor.rotationQuaternion = Quaternion.Identity();
+    anchor.position.copyFrom(desktopHoldBasePosition);
+    anchor.rotationQuaternion = desktopHoldBaseRotation.clone();
 
     if (!holdObject(root, anchor, "desktop", "desktop")) return false;
 
     desktopHold.root = root;
+    desktopHold.charging = false;
+    desktopHold.chargeStartedAt = 0;
     return true;
   }
 
@@ -1282,16 +1721,93 @@ function setupObjectInteractions(scene, xr) {
     if (!desktopHold.root) return;
     releaseHeldObject(desktopHold.root);
     desktopHold.root = null;
+    desktopHold.charging = false;
+    desktopHold.chargeStartedAt = 0;
+    if (desktopHold.anchor) {
+      desktopHold.anchor.position.copyFrom(desktopHoldBasePosition);
+      desktopHold.anchor.rotationQuaternion = desktopHoldBaseRotation.clone();
+    }
   }
+
+  function throwDesktopObject(root) {
+    const cam = scene.activeCamera;
+    if (!root || !cam) return;
+
+    const charge = getDesktopChargeAmount();
+    const speed = desktopMinThrowSpeed + (desktopMaxThrowSpeed - desktopMinThrowSpeed) * charge;
+    const direction = cam.getDirection(Axis.Z).normalize();
+    const velocity = direction.scale(speed).add(new Vector3(0, 0.35 + charge * 0.8, 0));
+
+    releaseHeldObject(root, velocity, Vector3.Zero());
+    desktopHold.root = null;
+    desktopHold.charging = false;
+    desktopHold.chargeStartedAt = 0;
+    if (desktopHold.anchor) {
+      desktopHold.anchor.position.copyFrom(desktopHoldBasePosition);
+      desktopHold.anchor.rotationQuaternion = desktopHoldBaseRotation.clone();
+    }
+  }
+
+  registerSharedStateReady(scene, (controls) => {
+    const seenRoots = new Set();
+    for (const mesh of scene.meshes) {
+      const root = getSceneInteractableRoot(mesh);
+      if (!root || !root.metadata?.pickupEnabled || seenRoots.has(root)) continue;
+      seenRoots.add(root);
+
+      const key = getObjectStateKey(root);
+      if (!key) continue;
+
+      controls.subscribe("object", key, (state) => {
+        if (
+          !state ||
+          state.ownerId === controls.getSelfId?.() ||
+          state.lastActorId === controls.getSelfId?.()
+        ) return;
+        if (root === desktopHold.root) return;
+        if ([...xrHeldObjects.values()].includes(root)) return;
+
+        disposeHeldObjectPhysics(root);
+        root.setParent(null);
+
+        if (state.position) {
+          root.position.copyFromFloats(state.position.x || 0, state.position.y || 0, state.position.z || 0);
+        }
+        if (state.rotation) {
+          root.rotationQuaternion = new Quaternion(
+            state.rotation.x || 0,
+            state.rotation.y || 0,
+            state.rotation.z || 0,
+            state.rotation.w || 1
+          );
+        }
+        if (state.scaling) {
+          root.scaling.copyFromFloats(state.scaling.x || 1, state.scaling.y || 1, state.scaling.z || 1);
+        } else if (root.metadata?.baseLocalScaling) {
+          root.scaling.copyFrom(root.metadata.baseLocalScaling);
+        }
+
+        root.setEnabled(state.enabled !== false);
+        setInteractablePickable(root, state.isPickable !== false);
+        root.metadata = {
+          ...(root.metadata || {}),
+          isHeld: !!state.isHeld,
+          heldBy: state.ownerId || null,
+          dropPhysicsActive: false,
+        };
+      });
+    }
+  });
 
   scene.onPointerObservable.add((pointerInfo) => {
     if (isInXR(scene)) return;
 
     const button = pointerInfo.event?.button;
-    if (pointerInfo.type !== PointerEventTypes.POINTERDOWN || (button != null && button !== 0)) {
+    if (button != null && button !== 0) {
       return;
     }
 
+    if (scene.isPointerOverSceneUI?.()) return;
     if (isSuppressedInteractionMesh(pointerInfo.pickInfo?.pickedMesh)) {
       return;
     }
@@ -1299,7 +1815,16 @@ function setupObjectInteractions(scene, xr) {
     if (scene.dartInteractionState?.desktopHold?.root) return;
 
     if (desktopHold.root) {
-      releaseDesktopObject();
+      if (pointerInfo.type === PointerEventTypes.POINTERDOWN) {
+        desktopHold.charging = true;
+        desktopHold.chargeStartedAt = performance.now();
+      } else if (pointerInfo.type === PointerEventTypes.POINTERUP && desktopHold.charging) {
+        throwDesktopObject(desktopHold.root);
+      }
+      return;
+    }
+
+    if (pointerInfo.type !== PointerEventTypes.POINTERDOWN) {
       return;
     }
 
@@ -1312,13 +1837,48 @@ function setupObjectInteractions(scene, xr) {
     }
 
     if (root.metadata?.pickupEnabled) {
+      if (isAnyDartHeld()) return;
       holdObjectOnDesktop(root);
     }
   });
 
   scene.onBeforeRenderObservable.add(() => {
+    if (desktopHold.root && !isInXR(scene)) {
+      applyDesktopChargeVisual(desktopHold.root, desktopHold.anchor);
+      emitObjectState(desktopHold.root);
+    }
+
+    const syncedRoots = new Set();
+    for (const mesh of scene.meshes) {
+      const root = mesh?.metadata?.interactableRoot || null;
+      if (!root?.metadata?.dropPhysicsActive || syncedRoots.has(root)) continue;
+      syncedRoots.add(root);
+
+      const collider = root.metadata.dropPhysicsCollider;
+      if (!collider) continue;
+
+      const colliderMatrix = collider.computeWorldMatrix(true);
+      const colliderScaling = new Vector3();
+      const colliderRotation = new Quaternion();
+      const colliderPosition = new Vector3();
+      colliderMatrix.decompose(colliderScaling, colliderRotation, colliderPosition);
+
+      const offset = root.metadata.dropPhysicsOffset || Vector3.Zero();
+      const rotationMatrix = Matrix.Identity();
+      colliderRotation.toRotationMatrix(rotationMatrix);
+      const rotatedOffset = Vector3.TransformCoordinates(offset, rotationMatrix);
+
+      root.position.copyFrom(colliderPosition.add(rotatedOffset));
+      root.rotationQuaternion = colliderRotation.clone();
+      emitObjectState(root);
+    }
+
     if (desktopHold.root && isInXR(scene)) {
       releaseDesktopObject();
+    }
+
+    for (const root of xrHeldObjects.values()) {
+      emitObjectState(root);
     }
   });
 
@@ -1332,6 +1892,7 @@ function setupObjectInteractions(scene, xr) {
       xrGripStates.clear();
       xrTriggerStates.clear();
       xrHeldObjects.clear();
+      xrMotionSamples.clear();
       return;
     }
 
@@ -1342,7 +1903,15 @@ function setupObjectInteractions(scene, xr) {
       const isTriggerDown = isTriggerPressed(controller);
       const wasTriggerDown = xrTriggerStates.get(controllerId) ?? false;
 
+      addControllerMotionSample(controller, controllerId);
+
       if (scene.dartInteractionState?.xrHeldDarts?.has(controllerId)) {
+        xrGripStates.set(controllerId, isPressed);
+        xrTriggerStates.set(controllerId, isTriggerDown);
+        continue;
+      }
+
+      if (!xrHeldObjects.has(controllerId) && isAnyDartHeld()) {
         xrGripStates.set(controllerId, isPressed);
         xrTriggerStates.set(controllerId, isTriggerDown);
         continue;
@@ -1357,7 +1926,13 @@ function setupObjectInteractions(scene, xr) {
       }
 
       if (!isPressed && wasPressed && xrHeldObjects.has(controllerId)) {
-        releaseHeldObject(xrHeldObjects.get(controllerId));
+        const root = xrHeldObjects.get(controllerId);
+        const velocity = getControllerReleaseVelocity(controllerId, controller);
+        if (velocity.length() >= xrDropSpeedThreshold) {
+          releaseHeldObject(root, velocity, Vector3.Zero());
+        } else {
+          releaseHeldObject(root);
+        }
         xrHeldObjects.delete(controllerId);
       }
 
@@ -1408,6 +1983,10 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   menuBoard.parent = menuHost;
   menuBoard.position.z = 0.02;
   menuBoard.isPickable = true;
+  menuBoard.metadata = {
+    ...(menuBoard.metadata || {}),
+    suppressSceneInteraction: true,
+  };
   menuBoard.setEnabled(false);
 
   const menuTexture = GUI.AdvancedDynamicTexture.CreateForMesh(
@@ -1493,6 +2072,10 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   listBoard.parent = menuHost;
   listBoard.position.set(0, 0.66, 0.02);
   listBoard.isPickable = true;
+  listBoard.metadata = {
+    ...(listBoard.metadata || {}),
+    suppressSceneInteraction: true,
+  };
   listBoard.setEnabled(false);
 
   const listTexture = GUI.AdvancedDynamicTexture.CreateForMesh(
@@ -1523,6 +2106,157 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   mutePanel.addRowDefinition(0.5);
   mutePanel.addRowDefinition(0.5);
   listCard.addControl(mutePanel);
+
+  const chatPanel = new GUI.Grid("chatMenuGrid");
+  chatPanel.width = "97%";
+  chatPanel.height = "88%";
+  chatPanel.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  chatPanel.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  chatPanel.isVisible = false;
+  chatPanel.addRowDefinition(0.66);
+  chatPanel.addRowDefinition(0.16);
+  chatPanel.addRowDefinition(0.18);
+  chatPanel.addColumnDefinition(1);
+  listCard.addControl(chatPanel);
+
+  const chatScroll = new GUI.ScrollViewer("chatScroll");
+  chatScroll.width = "98%";
+  chatScroll.height = "96%";
+  chatScroll.thickness = 1;
+  chatScroll.color = "#5f738a";
+  chatScroll.background = "#08111b";
+  chatScroll.barColor = "#7aa6d1";
+  chatScroll.thumbLength = 0.2;
+  chatPanel.addControl(chatScroll, 0, 0);
+
+  const chatMessagesStack = new GUI.StackPanel("chatMessagesStack");
+  chatMessagesStack.width = "100%";
+  chatMessagesStack.isVertical = true;
+  chatMessagesStack.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+  chatMessagesStack.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
+  chatMessagesStack.paddingLeft = "24px";
+  chatMessagesStack.paddingRight = "24px";
+  chatMessagesStack.paddingTop = "18px";
+  chatMessagesStack.paddingBottom = "18px";
+  chatScroll.addControl(chatMessagesStack);
+
+  const chatInputGrid = new GUI.Grid("chatInputGrid");
+  chatInputGrid.width = "98%";
+  chatInputGrid.height = "94%";
+  chatInputGrid.addColumnDefinition(0.72);
+  chatInputGrid.addColumnDefinition(0.14);
+  chatInputGrid.addColumnDefinition(0.14);
+  chatPanel.addControl(chatInputGrid, 1, 0);
+
+  const chatInput = new GUI.InputText("chatInput");
+  chatInput.width = "96%";
+  chatInput.height = "76%";
+  chatInput.maxWidth = 0.96;
+  chatInput.color = "white";
+  chatInput.background = "#112131";
+  chatInput.focusedBackground = "#172a3f";
+  chatInput.focusedColor = "white";
+  chatInput.thickness = 2;
+  chatInput.cornerRadius = 14;
+  chatInput.fontSize = 72;
+  chatInput.promptMessage = "Type a message";
+  chatInput.textHighlightColor = "#2563eb";
+  chatInput.paddingLeft = "16px";
+  chatInput.paddingRight = "16px";
+  chatInput.onFocusObservable.add(() => {
+    if (isInXR(scene) && keyboardBoard) {
+      keyboardBoard.setEnabled(true);
+    }
+  });
+  chatInputGrid.addControl(chatInput, 0, 0);
+
+  const chatSendButton = GUI.Button.CreateSimpleButton("chatSendButton", "Send");
+  styleMenuButton(chatSendButton, 156, "#2f7d5f");
+  chatSendButton.width = "90%";
+  chatSendButton.height = "76%";
+  chatInputGrid.addControl(chatSendButton, 0, 1);
+
+  const chatKeyboardButton = GUI.Button.CreateSimpleButton("chatKeyboardButton", "Keyboard");
+  styleMenuButton(chatKeyboardButton, 72, "#5b6b7c");
+  chatKeyboardButton.width = "90%";
+  chatKeyboardButton.height = "76%";
+  chatInputGrid.addControl(chatKeyboardButton, 0, 2);
+
+  const chatControlsGrid = new GUI.Grid("chatControlsGrid");
+  chatControlsGrid.width = "98%";
+  chatControlsGrid.height = "90%";
+  chatControlsGrid.addColumnDefinition(0.2);
+  chatControlsGrid.addColumnDefinition(0.2);
+  chatControlsGrid.addColumnDefinition(0.2);
+  chatControlsGrid.addColumnDefinition(0.4);
+  chatPanel.addControl(chatControlsGrid, 2, 0);
+
+  const chatClearButton = GUI.Button.CreateSimpleButton("chatClearButton", "Clear");
+  styleMenuButton(chatClearButton, 138, "#5b6b7c");
+  chatClearButton.width = "88%";
+  chatClearButton.height = "78%";
+  chatControlsGrid.addControl(chatClearButton, 0, 0);
+
+  const chatBackButton = GUI.Button.CreateSimpleButton("chatBackButton", "Back");
+  styleMenuButton(chatBackButton, 138, "#5b6b7c");
+  chatBackButton.width = "88%";
+  chatBackButton.height = "78%";
+  chatControlsGrid.addControl(chatBackButton, 0, 1);
+
+  const chatHintText = new GUI.TextBlock("chatHintText");
+  chatHintText.text = "Desktop: type here";
+  chatHintText.color = "#d8e6f3";
+  chatHintText.fontFamily = "Arial";
+  chatHintText.fontSize = 0;
+  chatHintText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+  chatHintText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  chatHintText.paddingLeft = "14px";
+  chatHintText.columnSpan = 2;
+  chatControlsGrid.addControl(chatHintText, 0, 2);
+
+  const keyboardBoard = MeshBuilder.CreatePlane(
+    "menuKeyboardBoard",
+    { width: 2.35, height: 1.16, sideOrientation: Mesh.DOUBLESIDE },
+    scene
+  );
+  keyboardBoard.parent = menuHost;
+  keyboardBoard.position.set(0, -0.78, 0.02);
+  keyboardBoard.isPickable = true;
+  keyboardBoard.metadata = {
+    ...(keyboardBoard.metadata || {}),
+    suppressSceneInteraction: true,
+  };
+  keyboardBoard.setEnabled(false);
+
+  const keyboardTexture = GUI.AdvancedDynamicTexture.CreateForMesh(
+    keyboardBoard,
+    3328,
+    1180,
+    false
+  );
+
+  const keyboardCard = new GUI.Rectangle("menuKeyboardCard");
+  keyboardCard.width = "99.2%";
+  keyboardCard.height = "94%";
+  keyboardCard.thickness = 3;
+  keyboardCard.cornerRadius = 28;
+  keyboardCard.color = "#bfd0df";
+  keyboardCard.background = "#0d1a29F2";
+  keyboardTexture.addControl(keyboardCard);
+
+  const keyboardGrid = new GUI.Grid("chatKeyboardGrid");
+  keyboardGrid.width = "97%";
+  keyboardGrid.height = "90%";
+  keyboardGrid.horizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+  keyboardGrid.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+  for (let i = 0; i < 10; i += 1) {
+    keyboardGrid.addColumnDefinition(0.1);
+  }
+  keyboardGrid.addRowDefinition(0.22);
+  keyboardGrid.addRowDefinition(0.22);
+  keyboardGrid.addRowDefinition(0.22);
+  keyboardGrid.addRowDefinition(0.34);
+  keyboardCard.addControl(keyboardGrid);
 
   let menuButtonIndex = 0;
   let settingsButtonIndex = 0;
@@ -1616,6 +2350,98 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     return button;
   }
 
+  function setChatKeyboardVisible(visible) {
+    keyboardBoard.setEnabled(!!visible && isInXR(scene));
+    chatHintText.text = isInXR(scene)
+      ? (keyboardBoard.isEnabled() ? "VR keyboard active" : "Open keyboard to type")
+      : "Desktop: type here";
+  }
+
+  function sendChatMessage() {
+    const text = chatInput.text || "";
+    const didSend = scene.chatControls?.sendMessage?.(text);
+    if (didSend) {
+      chatInput.text = "";
+    }
+  }
+
+  function appendChatInput(value) {
+    chatInput.text = `${chatInput.text || ""}${value}`;
+  }
+
+  function getChatMessagesSignature() {
+    const messages = scene.chatControls?.getMessages?.() || [];
+    return messages.map((message) => message.id).join("|");
+  }
+
+  function refreshChatPanel() {
+    activeListPanelMode = "chat";
+    const messages = scene.chatControls?.getMessages?.() || [];
+
+    chatMessagesStack.clearControls();
+
+    if (!messages.length) {
+      const emptyText = new GUI.TextBlock("chatMessagesEmpty");
+      emptyText.text = "No messages yet";
+      emptyText.color = "white";
+      emptyText.fontFamily = "Arial";
+      emptyText.fontSize = 126;
+      emptyText.textWrapping = true;
+      emptyText.resizeToFit = true;
+      emptyText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+      emptyText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
+      emptyText.height = "56px";
+      chatMessagesStack.addControl(emptyText);
+    } else {
+      for (const message of messages) {
+        const messageText = new GUI.TextBlock(`chatMessage_${message.id}`);
+        messageText.text = `${message.senderName}: ${message.text}`;
+        messageText.color = "white";
+        messageText.fontFamily = "Arial";
+        messageText.fontSize = 126;
+        messageText.textWrapping = true;
+        messageText.resizeToFit = true;
+        messageText.width = 0.96;
+        messageText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+        messageText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
+        messageText.paddingBottom = "20px";
+        chatMessagesStack.addControl(messageText);
+      }
+    }
+
+    lastChatMessagesSignature = getChatMessagesSignature();
+    chatScroll.verticalBar.value = 1;
+  }
+
+  function showChatPanel() {
+    menuPanel.isVisible = false;
+    settingsPanel.isVisible = false;
+    desktopControlsPanel.isVisible = false;
+    vrControlsPanel.isVisible = false;
+    volumePanel.isVisible = false;
+    mutePanel.isVisible = false;
+    chatPanel.isVisible = true;
+    listBoard.setEnabled(true);
+    leaveConfirmPanel.isVisible = false;
+    chatKeyboardButton.isVisible = true;
+    chatKeyboardButton.isEnabled = isInXR(scene);
+    setChatKeyboardVisible(isInXR(scene));
+    refreshChatPanel();
+  }
+
+  function addKeyboardKey(label, callback, row, column, columnSpan = 1, background = "#39556f") {
+    const button = GUI.Button.CreateSimpleButton(controlName(label, "chatkey_btn"), label);
+    styleMenuButton(button, 120, background);
+    button.width = "92%";
+    button.height = "82%";
+    button.onPointerUpObservable.add(callback);
+    if (columnSpan > 1) {
+      button.columnSpan = columnSpan;
+    }
+    keyboardGrid.addControl(button, row, column);
+    return button;
+  }
+
   function showMainPanel() {
     menuPanel.isVisible = true;
     settingsPanel.isVisible = false;
@@ -1623,7 +2449,9 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
     mutePanel.isVisible = false;
+    chatPanel.isVisible = false;
     listBoard.setEnabled(false);
+    keyboardBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
@@ -1634,7 +2462,9 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
     mutePanel.isVisible = false;
+    chatPanel.isVisible = false;
     listBoard.setEnabled(false);
+    keyboardBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
@@ -1645,7 +2475,9 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
     mutePanel.isVisible = false;
+    chatPanel.isVisible = false;
     listBoard.setEnabled(false);
+    keyboardBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
@@ -1656,7 +2488,9 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     vrControlsPanel.isVisible = true;
     volumePanel.isVisible = false;
     mutePanel.isVisible = false;
+    chatPanel.isVisible = false;
     listBoard.setEnabled(false);
+    keyboardBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
@@ -1667,13 +2501,17 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     vrControlsPanel.isVisible = false;
     volumePanel.isVisible = true;
     mutePanel.isVisible = false;
+    chatPanel.isVisible = false;
     listBoard.setEnabled(false);
+    keyboardBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
   function showMutePanel() {
     listBoard.setEnabled(true);
     mutePanel.isVisible = true;
+    chatPanel.isVisible = false;
+    keyboardBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = false;
   }
 
@@ -1716,7 +2554,9 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     vrControlsPanel.isVisible = false;
     volumePanel.isVisible = false;
     mutePanel.isVisible = false;
+    chatPanel.isVisible = false;
     listBoard.setEnabled(false);
+    keyboardBoard.setEnabled(false);
     leaveConfirmPanel.isVisible = true;
   }
 
@@ -1838,6 +2678,9 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   let xrTurnSpeedDownButton = null;
   let xrTurnSpeedUpButton = null;
   let micModeButton = null;
+  let activeListPanelMode = null;
+  let lastRemotePlayersSignature = "";
+  let lastChatMessagesSignature = "";
 
   function updateSettingsLabels() {
     if (locomotionButton) {
@@ -1877,6 +2720,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   function rebuildMutePanel() {
     mutePanel.clearControls();
     muteButtonIndex = 0;
+    activeListPanelMode = "mute";
     const players = scene.audioControls?.listRemotePlayers?.() || [];
 
     if (!players.length) {
@@ -1904,6 +2748,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   function rebuildPlayerListPanel() {
     mutePanel.clearControls();
     muteButtonIndex = 0;
+    activeListPanelMode = "players";
     const players = scene.audioControls?.listRemotePlayers?.() || [];
 
     if (!players.length) {
@@ -1921,7 +2766,42 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     addMuteButton("Back", showMainMenuPanel, 1, 3, listButtonFontSize, "#5b6b7c");
   }
 
-  addMenuButton("Open Server Chat", () => console.log("Open chat clicked"));
+  [
+    "QWERTYUIOP",
+    "ASDFGHJKL",
+    "ZXCVBNM",
+  ].forEach((rowText, rowIndex) => {
+    const startColumn = Math.floor((10 - rowText.length) / 2);
+    rowText.split("").forEach((char, charIndex) => {
+      addKeyboardKey(char, () => appendChatInput(char), rowIndex, startColumn + charIndex);
+    });
+  });
+
+  addKeyboardKey("Space", () => appendChatInput(" "), 3, 0, 4, "#4e6f8d");
+  addKeyboardKey("Back", () => {
+    chatInput.text = (chatInput.text || "").slice(0, -1);
+  }, 3, 4, 2, "#6f4e4e");
+  addKeyboardKey("Send", sendChatMessage, 3, 6, 2, "#2f7d5f");
+  addKeyboardKey("Close", () => setChatKeyboardVisible(false), 3, 8, 2, "#5b6b7c");
+
+  chatSendButton.onPointerUpObservable.add(sendChatMessage);
+  chatKeyboardButton.onPointerUpObservable.add(() => {
+    setChatKeyboardVisible(!keyboardBoard.isEnabled());
+  });
+  chatClearButton.onPointerUpObservable.add(() => {
+    chatInput.text = "";
+  });
+  chatBackButton.onPointerUpObservable.add(showMainMenuPanel);
+  chatInput.onKeyboardEventProcessedObservable.add((eventData) => {
+    const key = eventData?.event?.key || eventData?.key || "";
+    if (key === "Enter") {
+      sendChatMessage();
+    }
+  });
+
+  addMenuButton("Open Server Chat", () => {
+    showChatPanel();
+  });
   addMenuButton("Emotes", () => console.log("Open emotes clicked"));
   addMenuButton("Settings", () => {
     updateSettingsLabels();
@@ -2135,6 +3015,25 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     }
   }
 
+  scene.isPointerOverSceneUI = () => {
+    if (!menuVisible) return false;
+
+    const pick = scene.pick(
+      scene.pointerX,
+      scene.pointerY,
+      (mesh) => mesh === menuBoard || mesh === listBoard || mesh === keyboardBoard
+    );
+    return !!pick?.hit;
+  };
+
+  function getRemotePlayersSignature() {
+    const players = scene.audioControls?.listRemotePlayers?.() || [];
+    return players
+      .map((player) => `${player.id}:${player.name}:${player.muted ? 1 : 0}`)
+      .sort()
+      .join("|");
+  }
+
   scene.openMenu = showMenu;
   scene.closeMenu = hideMenu;
   scene.toggleMenu = toggleMenu;
@@ -2264,6 +3163,33 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   }
 
   scene.onBeforeRenderObservable.add(updateXRMenuActivator);
+  scene.onBeforeRenderObservable.add(() => {
+    if (!isInXR(scene) && keyboardBoard.isEnabled()) {
+      keyboardBoard.setEnabled(false);
+      chatHintText.text = "Desktop: type here";
+    }
+
+    const nextSignature = getRemotePlayersSignature();
+    if (nextSignature !== lastRemotePlayersSignature) {
+      lastRemotePlayersSignature = nextSignature;
+
+      if (listBoard.isEnabled() && mutePanel.isVisible) {
+        if (activeListPanelMode === "players") {
+          rebuildPlayerListPanel();
+        } else if (activeListPanelMode === "mute") {
+          rebuildMutePanel();
+        }
+      }
+    }
+
+    const nextChatSignature = getChatMessagesSignature();
+    if (nextChatSignature !== lastChatMessagesSignature) {
+      lastChatMessagesSignature = nextChatSignature;
+      if (listBoard.isEnabled() && chatPanel.isVisible && activeListPanelMode === "chat") {
+        refreshChatPanel();
+      }
+    }
+  });
 
   return { toggleMenu, refreshMenuPosition };
 }
@@ -2410,6 +3336,54 @@ export async function setupSharedWebXR(scene, options) {
     menu.refreshMenuPosition();
   }
 
+  function movePlayerWithCollisions(moveVector) {
+    if (!scene.playerMesh || !moveVector || moveVector.lengthSquared() <= 0.000001) {
+      return Vector3.Zero();
+    }
+
+    const baseY = playerHeight * 0.5;
+    const stepHeight = Math.max(settings.playerStepHeight || 0, 0);
+    const startPosition = scene.playerMesh.position.clone();
+    scene.playerMesh.moveWithCollisions(moveVector);
+    const appliedMove = scene.playerMesh.position.subtract(startPosition);
+    const appliedHorizontal = new Vector3(appliedMove.x, 0, appliedMove.z);
+
+    if (moveVector.y === 0 && moveVector.lengthSquared() > 0.000001) {
+      const requestedHorizontal = new Vector3(moveVector.x, 0, moveVector.z);
+      const wasBlocked = requestedHorizontal.lengthSquared() > 0.000001 &&
+        appliedHorizontal.length() + 0.001 < requestedHorizontal.length();
+
+      if (wasBlocked && stepHeight > 0) {
+        scene.playerMesh.position.copyFrom(startPosition);
+        scene.playerMesh.moveWithCollisions(new Vector3(0, stepHeight, 0));
+        scene.playerMesh.moveWithCollisions(moveVector);
+        scene.playerMesh.moveWithCollisions(new Vector3(0, -(stepHeight + 0.08), 0));
+
+        if (scene.playerMesh.position.y < baseY) {
+          scene.playerMesh.position.y = baseY;
+        }
+
+        const steppedMove = scene.playerMesh.position.subtract(startPosition);
+        const steppedHorizontal = new Vector3(steppedMove.x, 0, steppedMove.z);
+        if (steppedHorizontal.length() + 0.001 >= appliedHorizontal.length()) {
+          return steppedMove;
+        }
+
+        scene.playerMesh.position.copyFrom(startPosition.add(appliedMove));
+      }
+    }
+
+    if (moveVector.y === 0) {
+      scene.playerMesh.moveWithCollisions(new Vector3(0, -(stepHeight + 0.12), 0));
+    }
+
+    if (scene.playerMesh.position.y < baseY) {
+      scene.playerMesh.position.y = baseY;
+    }
+
+    return scene.playerMesh.position.subtract(startPosition);
+  }
+
   scene.onBeforeRenderObservable.add(() => {
     mirrorSetup?.updateMirrorPlane();
 
@@ -2477,9 +3451,16 @@ export async function setupSharedWebXR(scene, options) {
           const move = forward.scale(-moveY).add(right.scale(moveX));
           if (move.lengthSquared() > 0.0001) {
             move.normalize().scaleInPlace(settings.xrMoveSpeed * dt);
-            xrCamera.position.addInPlace(move);
             if (scene.xrOrigin) {
-              scene.xrOrigin.position.addInPlaceFromFloats(move.x, 0, move.z);
+              scene.playerMesh.position.x = scene.xrOrigin.position.x;
+              scene.playerMesh.position.z = scene.xrOrigin.position.z;
+            }
+            const appliedMove = movePlayerWithCollisions(new Vector3(move.x, 0, move.z));
+            if (appliedMove.lengthSquared() > 0.000001) {
+              xrCamera.position.addInPlaceFromFloats(appliedMove.x, 0, appliedMove.z);
+              if (scene.xrOrigin) {
+                scene.xrOrigin.position.addInPlaceFromFloats(appliedMove.x, 0, appliedMove.z);
+              }
             }
           }
         }
@@ -2515,12 +3496,14 @@ export async function setupSharedWebXR(scene, options) {
 
     if (move.lengthSquared() > 0.0001) {
       move.normalize().scaleInPlace(moveSpeed * dt);
-      mesh.position.addInPlace(move);
+      movePlayerWithCollisions(new Vector3(move.x, 0, move.z));
     }
 
     mesh.rotationQuaternion = Quaternion.Identity();
     mesh.rotation.set(0, 0, 0);
-    mesh.position.y = playerHeight * 0.5;
+    if (mesh.position.y < playerHeight * 0.5) {
+      mesh.position.y = playerHeight * 0.5;
+    }
     cam.position.y = playerHeight * 0.5;
 
     if (mesh.physicsImpostor) {

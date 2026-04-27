@@ -1,38 +1,50 @@
-import { PBRMaterial, Vector3 } from "babylonjs";
+import { Vector3 } from "babylonjs";
 import {
   createBaseScene,
   createMirror,
-  createStaticWall,
   loadSceneModel,
-  markSceneInteractable,
-  placeObjectModel,
+  placeSceneObjects,
 } from "./sceneSetup.js";
 import { setupSharedWebXR } from "./sharedWebXR.js";
 import { createSceneTVObject } from "./tvSetup.js";
 import { createAvatarMirrorPanel } from "./avatarMirrorPanel.js";
+import {
+  configureDartBoardTarget,
+  configurePictureReveal,
+  configureThrowableDart,
+} from "./sharedSceneFeatures.js";
 
 const TABLE_POSITION = new Vector3(1.23, 1.59, 8.87);
 const TABLE_ROTATION = new Vector3(0, Math.PI / 2, 0);
 const TABLE_TOP_Y = 1.76;
-const pictureSwapResults = new Map();
 const TEST_ROOM_OBJECTS = [
   {
     fileName: "table.glb",
     position: TABLE_POSITION,
     rotation: TABLE_ROTATION,
     scaling: new Vector3(1, 1, 1),
+    staticCollider: {
+      padding: new Vector3(0.18, 0.08, 0.18),
+      centerOffset: new Vector3(0, -0.02, 0),
+    },
   },
   {
     fileName: "chair.glb",
     position: new Vector3(3.2, 0.68, 8.75),
     rotation: Vector3.Zero(),
     scaling: new Vector3(0.5, 0.5, 0.5),
+    staticCollider: {
+      padding: new Vector3(0.1, 0.08, 0.1),
+    },
   },
   {
     fileName: "chair.glb",
     position: new Vector3(-0.61, 0.68, 8.75),
     rotation: new Vector3(0, Math.PI, 0),
     scaling: new Vector3(0.5, 0.5, 0.5),
+    staticCollider: {
+      padding: new Vector3(0.1, 0.08, 0.1),
+    },
   },
   {
     fileName: "dart-target.glb",
@@ -40,8 +52,7 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, -Math.PI / 2, 0),
     scaling: new Vector3(0.7, 0.7, 0.7),
     afterPlace: (result) => {
-      forceOpaqueDartBoardTexture(result);
-      markDartBoardTarget(result);
+      configureDartBoardTarget(result, { forceOpaqueTexture: true });
     },
   },
   {
@@ -50,7 +61,7 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      markDartInteractable(result);
+      configureThrowableDart(result);
     },
   },
   {
@@ -59,7 +70,7 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, 0, -Math.PI / 6),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      markDartInteractable(result);
+      configureThrowableDart(result);
     },
   },
   {
@@ -139,6 +150,9 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI, 0),
     scaling: new Vector3(0.32, 0.32, 0.32),
     interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
   },
   {
     fileName: "mic-stand.glb",
@@ -146,6 +160,9 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, -Math.PI / 2.7, 0),
     scaling: new Vector3(0.13, 0.13, 0.13),
     interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.08, 0.14, 0.08),
+    },
   },
   {
     fileName: "microphone-and-stand.glb",
@@ -153,15 +170,18 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 2.8, 0),
     scaling: new Vector3(0.12, 0.12, 0.12),
     interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.08, 0.14, 0.08),
+    },
   },
   createSceneTVObject({
-    position: new Vector3(0.95, 4.66, 10.93),
+    position: new Vector3(0.95, 5.66, 10.93),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.95, 0.95, 0.95),
   }),
   {
     fileName: "andy-picture.glb",
-    position: new Vector3(-1.25, 2.17, 10.94),
+    position: new Vector3(-1.25, 3.17, 10.94),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.55, 0.55, 0.55),
     interactable: true,
@@ -169,12 +189,38 @@ const TEST_ROOM_OBJECTS = [
       activateOnSelect: true,
     },
     afterPlace: (result) => {
-      registerPictureSwapResult("andy-picture.glb", result);
+      configurePictureReveal(result);
+    },
+  },
+  {
+    fileName: "Quincy-Picture.glb",
+    position: new Vector3(0.22, 3.17, 10.94),
+    rotation: new Vector3(0, Math.PI / 2, 0),
+    scaling: new Vector3(0.55, 0.55, 0.55),
+    interactable: true,
+    interaction: {
+      activateOnSelect: true,
+    },
+    afterPlace: (result) => {
+      configurePictureReveal(result);
+    },
+  },
+  {
+    fileName: "Tyler-Picture.glb",
+    position: new Vector3(1.68, 3.17, 10.94),
+    rotation: new Vector3(0, Math.PI / 2, 0),
+    scaling: new Vector3(0.55, 0.55, 0.55),
+    interactable: true,
+    interaction: {
+      activateOnSelect: true,
+    },
+    afterPlace: (result) => {
+      configurePictureReveal(result);
     },
   },
   {
     fileName: "sam-picture.glb",
-    position: new Vector3(3.15, 2.17, 10.94),
+    position: new Vector3(3.15, 3.17, 10.94),
     rotation: new Vector3(0, Math.PI / 2, 0),
     scaling: new Vector3(0.55, 0.55, 0.55),
     interactable: true,
@@ -182,7 +228,7 @@ const TEST_ROOM_OBJECTS = [
       activateOnSelect: true,
     },
     afterPlace: (result) => {
-      registerPictureSwapResult("sam-picture.glb", result);
+      configurePictureReveal(result);
     },
   },
   {
@@ -192,163 +238,6 @@ const TEST_ROOM_OBJECTS = [
     scaling: new Vector3(0.8, 0.8, 0.8),
   },
 ];
-
-async function addTestRoomProps(scene) {
-  for (const object of TEST_ROOM_OBJECTS) {
-    const result = await placeObjectModel(
-      scene,
-      object.fileName,
-      object.position,
-      object.rotation,
-      object.scaling
-    );
-
-    if (object.interactable) {
-      markSceneInteractable(result, object.fileName, object.interaction);
-    }
-
-    object.afterPlace?.(result);
-  }
-}
-
-function markDartInteractable(result) {
-  const root = result.meshes[0];
-  if (!root) return;
-
-  const baseLocalScaling = root.scaling.clone();
-  root.metadata = {
-    ...(root.metadata || {}),
-    isThrowableDart: true,
-    dartRoot: root,
-    baseLocalScaling,
-  };
-
-  for (const mesh of result.meshes) {
-    mesh.isPickable = true;
-    mesh.metadata = {
-      ...(mesh.metadata || {}),
-      isThrowableDart: true,
-      dartRoot: root,
-      baseLocalScaling: baseLocalScaling.clone(),
-    };
-  }
-}
-
-function registerPictureSwapResult(key, result) {
-  pictureSwapResults.set(key, result);
-  if (pictureSwapResults.size < 2) return;
-
-  const andyResult = pictureSwapResults.get("andy-picture.glb");
-  const samResult = pictureSwapResults.get("sam-picture.glb");
-  if (!andyResult || !samResult) return;
-
-  configurePictureSwap(andyResult, samResult);
-  configurePictureSwap(samResult, andyResult);
-}
-
-function configurePictureSwap(primaryResult, alternateResult) {
-  const primaryRoot = primaryResult.meshes[0];
-  if (primaryRoot?.metadata?.pictureSwapConfigured) return;
-  const primaryPictureMesh = findPictureSurfaceMesh(primaryResult);
-  if (!primaryRoot || !primaryPictureMesh) return;
-
-  primaryRoot.metadata = {
-    ...(primaryRoot.metadata || {}),
-    activateOnSelect: true,
-    pictureSwapConfigured: true,
-    onActivate: () => {
-      primaryPictureMesh.setEnabled(!primaryPictureMesh.isEnabled());
-    },
-  };
-
-  for (const mesh of primaryResult.meshes) {
-    mesh.isPickable = true;
-    mesh.metadata = {
-      ...(mesh.metadata || {}),
-      activateOnSelect: true,
-      onActivate: primaryRoot.metadata.onActivate,
-      interactableRoot: primaryRoot,
-    };
-  }
-}
-
-function findPictureSurfaceMesh(result) {
-  return result.meshes.find((mesh) => mesh.material?.name?.toLowerCase?.().includes("-prof")) || null;
-}
-
-function markDartBoardTarget(result) {
-  const root = result.meshes[0];
-  if (!root) return;
-
-  root.metadata = {
-    ...(root.metadata || {}),
-    isDartBoardTarget: true,
-    dartBoardRoot: root,
-  };
-
-  for (const mesh of result.meshes) {
-    mesh.isPickable = true;
-    mesh.metadata = {
-      ...(mesh.metadata || {}),
-      isDartBoardTarget: true,
-      dartBoardRoot: root,
-    };
-  }
-}
-
-function forceOpaqueDartBoardTexture(result) {
-  const materials = new Set(
-    result.meshes
-      .map((mesh) => mesh.material)
-      .filter(Boolean)
-  );
-
-  for (const material of materials) {
-    material.alpha = 1;
-    material.backFaceCulling = false;
-
-    if ("transparencyMode" in material) {
-      material.transparencyMode = PBRMaterial.PBRMATERIAL_OPAQUE;
-    }
-
-    if ("useAlphaFromAlbedoTexture" in material) {
-      material.useAlphaFromAlbedoTexture = false;
-    }
-
-    for (const texture of [material.albedoTexture, material.diffuseTexture]) {
-      if (!texture) continue;
-      texture.hasAlpha = false;
-      texture.getAlphaFromRGB = false;
-    }
-  }
-}
-
-function addTestRoomCollision(scene) {
-  const wallHeight = 2;
-  const wallLength = 6;
-  const wallThickness = 0.2;
-
-  createStaticWall(
-    scene,
-    "backWall",
-    { width: wallLength, height: wallHeight, depth: wallThickness },
-    new Vector3(0, wallHeight / 2, wallLength / 2)
-  );
-
-  createStaticWall(
-    scene,
-    "leftWall",
-    { width: wallThickness, height: wallHeight, depth: wallLength },
-    new Vector3(-wallLength / 2, wallHeight / 2, 0)
-  );
-
-  createStaticWall(
-    scene,
-    "rightWall",
-    { width: wallThickness, height: wallHeight, depth: wallLength },
-    new Vector3(wallLength / 2, wallHeight / 2, 0)
-  );
-}
 
 export async function startScene(engine) {
   const {
@@ -361,9 +250,11 @@ export async function startScene(engine) {
 
   const mirror = createMirror(scene);
 
-  await loadSceneModel(scene, "test-room.glb");
-  await addTestRoomProps(scene);
-  addTestRoomCollision(scene);
+  const roomResult = await loadSceneModel(scene, "test-room.glb");
+  for (const mesh of roomResult.meshes) {
+    mesh.checkCollisions = false;
+  }
+  await placeSceneObjects(scene, TEST_ROOM_OBJECTS);
 
   await setupSharedWebXR(scene, {
     ground,
