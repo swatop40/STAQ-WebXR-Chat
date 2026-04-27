@@ -6,6 +6,13 @@ import {
   placeSceneObjects,
 } from "./sceneSetup.js";
 import { setupSharedWebXR } from "./sharedWebXR.js";
+import { createSceneTVObject } from "./tvSetup.js";
+import { createAvatarMirrorPanel } from "./avatarMirrorPanel.js";
+import {
+  configureDartBoardTarget,
+  configurePictureReveal,
+  configureThrowableDart,
+} from "./sharedSceneFeatures.js";
 
 const BAR_SCENE_OBJECTS = [
   {
