@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import cors from "cors";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sanitizeChatText, sanitizeDisplayName } from "../src/utils/textModeration.js";
 
 const app = express();
 app.use(cors());
@@ -69,13 +70,6 @@ app.get("/api/karaoke-songs", async (_req, res) => {
 
 function makeSpawn() {
   return { x: (Math.random() - 0.5) * 2, y: 1.6, z: (Math.random() - 0.5) * 2 };
-}
-
-function sanitizeChatText(text) {
-  return String(text || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 240);
 }
 
 function sanitizeSceneStateValue(value, depth = 0) {
@@ -309,7 +303,7 @@ io.on("connection", (socket) => {
   if (!p || !data) return;
 
   if (typeof data.name === "string" && data.name.trim()) {
-    p.name = data.name.trim().slice(0, 20);
+    p.name = sanitizeDisplayName(data.name, p.name || "Player");
   }
 
   if (data.avatarMode === "vr" || data.avatarMode === "desktop") {

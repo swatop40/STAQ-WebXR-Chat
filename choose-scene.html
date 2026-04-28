@@ -167,6 +167,9 @@
               alert(
                 `The ${error.sceneId || sceneKey} scene is full (${error.max ?? "max"} players). Please choose another scene.`
               );
+            } else if (error?.code === "INVALID_PLAYER_NAME") {
+              alert(error.message || "That name is not allowed. Please choose a different name.");
+              window.location.href = "index.html";
             } else {
               console.error("[JOIN] Failed to launch selected scene", error);
               alert("Could not join that scene right now. Please try again.");
