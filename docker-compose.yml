@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  staq-webxr-chat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      CORS_ORIGIN: "*"
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - staq-webxr-chat
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -3,16 +3,27 @@ import http from "http";
 import { Server } from "socket.io";
 import cors from "cors";
 import fs from "node:fs/promises";
+import syncFs from "node:fs";
 import path from "node:path";
 import { sanitizeChatText, sanitizeDisplayName } from "../src/utils/textModeration.js";
+import { fileURLToPath } from "node:url";
 
 const app = express();
-app.use(cors());
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const repoRoot = path.resolve(__dirname, "..");
+const distDir = path.join(repoRoot, "dist");
+const karaokeSongsDir = path.join(repoRoot, "public", "karaoke-songs");
+const isProduction = process.env.NODE_ENV === "production";
+const allowedOrigin = process.env.CORS_ORIGIN || "*";
+
+app.use(cors({ origin: allowedOrigin }));
 
 const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
-  cors: { origin: "*" },
+  cors: { origin: allowedOrigin },
 });
 
 const players = new Map();
@@ -33,10 +44,16 @@ const SCENE_CAPACITY = {
   parking: 10,
 };
 
-
 const tvDebugPlaybackByKey = new Map();
-const karaokeSongsDir = path.resolve(process.cwd(), "public", "karaoke-songs");
 const supportedKaraokeExtensions = new Set([".mp4", ".webm", ".mov", ".m4v"]);
+
+app.get("/healthz", (_req, res) => {
+  res.json({
+    ok: true,
+    players: players.size,
+    uptimeSeconds: Math.round(process.uptime()),
+  });
+});
 
 function makeTrackTitle(fileName) {
   return path
@@ -67,6 +84,10 @@ app.get("/api/karaoke-songs", async (_req, res) => {
     res.status(500).json({ tracks: [], error: "Failed to read karaoke songs directory" });
   }
 });
+
+if (syncFs.existsSync(distDir)) {
+  app.use(express.static(distDir));
+}
 
 function makeSpawn() {
   return { x: (Math.random() - 0.5) * 2, y: 1.6, z: (Math.random() - 0.5) * 2 };
@@ -516,7 +537,27 @@ setInterval(() => {
   }
 }, 1000 / TICK_HZ);
 
-const PORT = 3000;
-httpServer.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+app.get("/", (_req, res) => {
+  if (syncFs.existsSync(path.join(distDir, "index.html"))) {
+    res.sendFile(path.join(distDir, "index.html"));
+    return;
+  }
+
+  res.status(503).json({
+    error: "Frontend build not found. Run `npm run build` before starting production server.",
+  });
+});
+
+app.get("/choose-scene.html", (_req, res) => {
+  if (syncFs.existsSync(path.join(distDir, "choose-scene.html"))) {
+    res.sendFile(path.join(distDir, "choose-scene.html"));
+    return;
+  }
+
+  res.status(404).json({ error: "choose-scene.html not found in dist output" });
+});
+
+const PORT = Number(process.env.PORT || 3000);
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(`Server running on http://0.0.0.0:${PORT}`);
 });

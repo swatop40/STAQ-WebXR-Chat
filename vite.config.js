@@ -1,8 +1,9 @@
+import path from 'node:path'
 import { defineConfig } from 'vite'
 import mkcert from 'vite-plugin-mkcert'
 
-export default defineConfig({
-  plugins: [mkcert()],
+export default defineConfig(({ command }) => ({
+  plugins: command === 'serve' ? [mkcert()] : [],
   server: {
     https: true,
     host: '0.0.0.0',
@@ -19,5 +20,13 @@ export default defineConfig({
         changeOrigin: true
       }
     }
-  }
-})
+  },
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        chooseScene: path.resolve(__dirname, 'choose-scene.html'),
+      },
+    },
+  },
+}))
