@@ -343,7 +343,14 @@ export async function startScene(engine) {
     playerSpawn,
   } = createBaseScene(engine);
 
-  const mirror = createMirror(scene);
+  const START_MIRROR_TRANSFORM = {
+  position: new Vector3(-3, 2, -14.651),
+  rotation: new Vector3(0, 3.141592653589793, 0),
+  scaling: new Vector3(1, 1, 1),
+  width: 4.5,
+  height: 7.2,
+};
+  const mirror = createMirror(scene, START_MIRROR_TRANSFORM);
   createAvatarMirrorPanel(scene, mirror, {
     position: new Vector3(2.26, 0.7, -1.21),
     rotation: new Vector3(0, 0.5235987755982988, 0),

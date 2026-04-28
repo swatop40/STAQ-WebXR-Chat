@@ -569,6 +569,56 @@ const BAR_SCENE_OBJECTS = [
       padding: new Vector3(0.1, 0.08, 0.1),
     },
   },
+  {
+    fileName: "Bar_Stool.glb",
+    position: new Vector3(8.689, 0.83, -0.386),
+    rotation: new Vector3(0, 0, 0),
+    scaling: new Vector3(0.275, 0.275, 0.275),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
+  },
+  {
+    fileName: "Bar_Stool.glb",
+    position: new Vector3(8.689, 0.83, -2.386),
+    rotation: new Vector3(0, 0, 0),
+    scaling: new Vector3(0.275, 0.275, 0.275),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
+  },
+  {
+    fileName: "Bar_Stool.glb",
+    position: new Vector3(8.689, 0.83, -4.386),
+    rotation: new Vector3(0, 0, 0),
+    scaling: new Vector3(0.275, 0.275, 0.275),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
+  },
+  {
+    fileName: "Bar_Stool.glb",
+    position: new Vector3(8.689, 0.83, -6.386),
+    rotation: new Vector3(0, 0, 0),
+    scaling: new Vector3(0.275, 0.275, 0.275),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
+  },
+  {
+    fileName: "mic-stand.glb",
+    position: new Vector3(-2.289, 1.191, -6.423),
+    rotation: new Vector3(0, 4.71238898038469, 0),
+    scaling: new Vector3(0.13, 0.13, 0.13),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.08, 0.14, 0.08),
+    },
+  },
 ];
 
 export async function startScene(engine) {
@@ -580,7 +630,15 @@ export async function startScene(engine) {
     playerSpawn,
   } = createBaseScene(engine);
 
-  const mirror = createMirror(scene);
+  const START_MIRROR_TRANSFORM = {
+  position: new Vector3(-5.337, 2, 3),
+  rotation: new Vector3(0, 4.71238898038469, 0),
+  scaling: new Vector3(1, 1, 1),
+  width: 4.5,
+  height: 7.2,
+};
+
+  const mirror = createMirror(scene, START_MIRROR_TRANSFORM);
   createAvatarMirrorPanel(scene, mirror, {
     position: new Vector3(2.26, 0.7, -1.21),
     rotation: new Vector3(0, 0.5235987755982988, 0),
