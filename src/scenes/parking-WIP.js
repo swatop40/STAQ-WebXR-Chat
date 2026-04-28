@@ -259,75 +259,61 @@ const PARKING_SCENE_OBJECTS = [
   }),
   {
     fileName: "dart-target.glb",
-    position: new Vector3(-7.16, 2.11, 10.98),
-    rotation: new Vector3(0, -Math.PI / 2, 0),
+    position: new Vector3(-18, 3, -14.65),
+    rotation: new Vector3(0, 1.5707963267948966, 0),
     scaling: new Vector3(0.7, 0.7, 0.7),
     afterPlace: (result) => {
-      configureDartBoardTarget(result, {
-        forceOpaqueTexture: true,
-        gameId: 1,
-        panelTransform: DART_GAME_1,
-      });
+      configureDartBoardTarget(result, { forceOpaqueTexture: true });
     },
   },
   {
     fileName: "dart-blue.glb",
-    position: new Vector3(0.8, 1.76, 9.24),
+    position: new Vector3(-20, 1.73, -8),
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result, {
-        gameId: 1,
-      });
+      configureThrowableDart(result);
     },
   },
   {
     fileName: "dart-blue.glb",
-    position: new Vector3(0.8, 1.76, 9.24),
+    position: new Vector3(-20.2, 1.73, -7.8),
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result, {
-        gameId: 1,
-      });
+      configureThrowableDart(result);
     },
   },
   {
     fileName: "dart-blue.glb",
-    position: new Vector3(0.8, 1.76, 9.24),
+    position: new Vector3(-20.4, 1.73, -7.6),
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result, {
-        gameId: 1,
-      });
+      configureThrowableDart(result);
     },
   },
   {
     fileName: "dart-red.glb",
-    position: new Vector3(0.8, 1.76, 9.24),
+    position: new Vector3(-21, 1.73, -8),
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result, {
-        gameId: 1,
-      });
+      configureThrowableDart(result);
     },
   },
   {
     fileName: "dart-red.glb",
-    position: new Vector3(0.8, 1.76, 9.24),
+    position: new Vector3(-21.2, 1.73, -7.8),
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result, {
-        gameId: 1,
-      });
+      configureThrowableDart(result);
     },
   },
   {
     fileName: "dart-red.glb",
-    position: new Vector3(0.8, 1.76, 9.24),
+    position: new Vector3(-21.4, 1.73, -7.6),
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
@@ -338,7 +324,7 @@ const PARKING_SCENE_OBJECTS = [
   },
   {
     fileName: "table.glb",
-    position: new Vector3(5.774, 2.045, 19.007),
+    position: new Vector3(-21, 1.572, -8),
     rotation: new Vector3(0,0,0),
     scaling: new Vector3(0.75, 0.75, 0.75),
     staticCollider: {
@@ -358,10 +344,11 @@ export async function startScene(engine) {
   } = createBaseScene(engine);
 
   const mirror = createMirror(scene);
-  const DART_GAME_1 = {
-  position: new Vector3(-5.49, 2.11, 10.99),
-  rotation: Vector3.Zero(),
-};
+  createAvatarMirrorPanel(scene, mirror, {
+    position: new Vector3(2.26, 0.7, -1.21),
+    rotation: new Vector3(0, 0.5235987755982988, 0),
+  });
+
   await loadSceneModel(scene, "parking-WIP.glb");
   await placeSceneObjects(scene, PARKING_SCENE_OBJECTS);
 
