@@ -15,15 +15,17 @@ function registerSharedStateReady(scene, callback) {
   scene._sharedStateReadyCallbacks.push(callback);
 }
 
-export function configureThrowableDart(result) {
+export function configureThrowableDart(result, options = {}) {
   const root = result?.meshes?.[0];
   if (!root) return;
+  const gameId = options.gameId || "default";
 
   const baseLocalScaling = root.scaling.clone();
   root.metadata = {
     ...(root.metadata || {}),
     isThrowableDart: true,
     dartRoot: root,
+    dartGameId: gameId,
     baseLocalScaling,
   };
 
@@ -33,6 +35,7 @@ export function configureThrowableDart(result) {
       ...(mesh.metadata || {}),
       isThrowableDart: true,
       dartRoot: root,
+      dartGameId: gameId,
       baseLocalScaling: baseLocalScaling.clone(),
     };
   }
@@ -66,6 +69,8 @@ export function forceOpaqueResultMaterials(result) {
 export function configureDartBoardTarget(result, options = {}) {
   const {
     forceOpaqueTexture = false,
+    gameId = "default",
+    panelTransform = null,
   } = options;
 
   if (forceOpaqueTexture) {
@@ -79,6 +84,8 @@ export function configureDartBoardTarget(result, options = {}) {
     ...(root.metadata || {}),
     isDartBoardTarget: true,
     dartBoardRoot: root,
+    dartGameId: gameId,
+    dartGamePanelTransform: panelTransform || null,
   };
 
   for (const mesh of result.meshes) {
@@ -87,6 +94,8 @@ export function configureDartBoardTarget(result, options = {}) {
       ...(mesh.metadata || {}),
       isDartBoardTarget: true,
       dartBoardRoot: root,
+      dartGameId: gameId,
+      dartGamePanelTransform: panelTransform || null,
     };
   }
 }

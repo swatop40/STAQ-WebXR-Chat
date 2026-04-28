@@ -150,27 +150,13 @@ function setupMirror(scene, mirror) {
 }
 
 function setupDartInteractions(scene, xr, options = {}) {
+  const defaultDartGameId = "default";
   const xrGripStates = new Map();
   const xrHeldDarts = new Map();
   const xrMotionSamples = new Map();
   const flyingDarts = new Set();
   const dartFlightPositions = new Map();
-  const dartScore = {
-    activePlayer: 0,
-    turnThrows: 0,
-    throwsPerTurn: 3,
-    gameOver: false,
-    players: [
-      { name: "Player 1", remaining: 300 },
-      { name: "Player 2", remaining: 300 },
-    ],
-    hitBoard: null,
-    hitText: null,
-    gameBoard: null,
-    playerTexts: [],
-    statusText: null,
-    restartButton: null,
-  };
+  const dartGames = new Map();
   const desktopHold = {
     root: null,
     anchor: null,
@@ -188,6 +174,7 @@ function setupDartInteractions(scene, xr, options = {}) {
   scene.dartInteractionState = {
     xrHeldDarts,
     desktopHold,
+    dartGames,
   };
   const dartBoardScoreRings = [
     { maxRadius: 0.12, points: 50, label: "Bullseye" },
@@ -198,6 +185,43 @@ function setupDartInteractions(scene, xr, options = {}) {
   ];
   const dartLastSyncAt = new Map();
   let applyingRemoteDartGameState = false;
+
+  function createDartGameState(gameId = defaultDartGameId) {
+    return {
+      gameId,
+      activePlayer: 0,
+      turnThrows: 0,
+      throwsPerTurn: 3,
+      gameOver: false,
+      players: [
+        { name: "Player 1", remaining: 300 },
+        { name: "Player 2", remaining: 300 },
+      ],
+      hitBoard: null,
+      hitText: null,
+      gameBoard: null,
+      playerTexts: [],
+      statusText: null,
+      restartButton: null,
+    };
+  }
+
+  function getDartGameId(rootOrMesh) {
+    return rootOrMesh?.metadata?.dartGameId || defaultDartGameId;
+  }
+
+  function getDartGamePanelTransform(rootOrMesh) {
+    return rootOrMesh?.metadata?.dartGamePanelTransform || null;
+  }
+
+  function getDartGame(gameId = defaultDartGameId) {
+    let game = dartGames.get(gameId);
+    if (!game) {
+      game = createDartGameState(gameId);
+      dartGames.set(gameId, game);
+    }
+    return game;
+  }
 
   function getDartStateKey(root) {
     return root?.name || null;
@@ -231,6 +255,7 @@ function setupDartInteractions(scene, xr, options = {}) {
       enabled: root.isEnabled(),
       isPickable: !!root.isPickable,
       isHeld: !!root.metadata?.isHeld,
+      gameId: getDartGameId(root),
       ownerId: overrides.ownerId ?? root.metadata?.heldBy ?? null,
       ...overrides,
     };
@@ -247,10 +272,11 @@ function setupDartInteractions(scene, xr, options = {}) {
     controls.emit("dart", key, serializeDartTransform(root, overrides));
   }
 
-  function emitDartGameState(force = false) {
+  function emitDartGameState(gameId = defaultDartGameId, force = false) {
     if (applyingRemoteDartGameState) return;
+    const dartScore = getDartGame(gameId);
 
-    scene.sharedStateControls?.emit("dartGame", "default", {
+    scene.sharedStateControls?.emit("dartGame", gameId, {
       activePlayer: dartScore.activePlayer,
       turnThrows: dartScore.turnThrows,
       throwsPerTurn: dartScore.throwsPerTurn,
@@ -524,11 +550,13 @@ function setupDartInteractions(scene, xr, options = {}) {
   }
 
   function ensureDartScoreDisplay(boardRoot, pick) {
+    const gameId = getDartGameId(boardRoot);
+    const dartScore = getDartGame(gameId);
     if (dartScore.hitBoard && dartScore.hitText && dartScore.gameBoard) return;
 
     const frame = getDartBoardFrame(boardRoot, pick);
     const hitBoard = MeshBuilder.CreatePlane(
-      "dartHitBoard",
+      `dartHitBoard_${gameId}`,
       { width: 1.35, height: 0.42 },
       scene
     );
@@ -541,7 +569,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     hitBoard.isPickable = false;
 
     const hitTexture = GUI.AdvancedDynamicTexture.CreateForMesh(hitBoard, 768, 240, false);
-    const hitText = new GUI.TextBlock("dartHitText");
+    const hitText = new GUI.TextBlock(`dartHitText_${gameId}`);
     hitText.color = "white";
     hitText.fontFamily = "Arial";
     hitText.fontSize = 58;
@@ -552,12 +580,13 @@ function setupDartInteractions(scene, xr, options = {}) {
     hitTexture.addControl(hitText);
 
     const gameBoard = MeshBuilder.CreatePlane(
-      "dartGameBoard",
+      `dartGameBoard_${gameId}`,
       { width: 1.65, height: 1.05 },
       scene
     );
-    if (dartGamePanelTransform?.position) {
-      gameBoard.position.copyFrom(dartGamePanelTransform.position);
+    const panelTransform = getDartGamePanelTransform(boardRoot) || dartGamePanelTransform;
+    if (panelTransform?.position) {
+      gameBoard.position.copyFrom(panelTransform.position);
     } else {
       gameBoard.position.copyFrom(
         frame.center
@@ -566,26 +595,27 @@ function setupDartInteractions(scene, xr, options = {}) {
       );
     }
 
-    if (dartGamePanelTransform?.rotationQuaternion) {
-      gameBoard.rotationQuaternion = dartGamePanelTransform.rotationQuaternion.clone();
-    } else if (dartGamePanelTransform?.rotation) {
+    if (panelTransform?.rotationQuaternion) {
+      gameBoard.rotationQuaternion = panelTransform.rotationQuaternion.clone();
+    } else if (panelTransform?.rotation) {
       gameBoard.rotationQuaternion = null;
-      gameBoard.rotation.copyFrom(dartGamePanelTransform.rotation);
+      gameBoard.rotation.copyFrom(panelTransform.rotation);
     } else {
       gameBoard.rotationQuaternion = Quaternion.FromLookDirectionLH(frame.faceNormal, Vector3.Up());
     }
 
-    if (dartGamePanelTransform?.scaling) {
-      gameBoard.scaling.copyFrom(dartGamePanelTransform.scaling);
+    if (panelTransform?.scaling) {
+      gameBoard.scaling.copyFrom(panelTransform.scaling);
     }
     gameBoard.isPickable = true;
     gameBoard.metadata = {
       ...(gameBoard.metadata || {}),
       suppressSceneInteraction: true,
+      dartGameId: gameId,
     };
 
     const gameTexture = GUI.AdvancedDynamicTexture.CreateForMesh(gameBoard, 1024, 640, false);
-    const panel = new GUI.Rectangle("dartGamePanel");
+    const panel = new GUI.Rectangle(`dartGamePanel_${gameId}`);
     panel.width = "100%";
     panel.height = "100%";
     panel.thickness = 3;
@@ -594,7 +624,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     panel.background = "#101820E6";
     gameTexture.addControl(panel);
 
-    const grid = new GUI.Grid("dartGameGrid");
+    const grid = new GUI.Grid(`dartGameGrid_${gameId}`);
     grid.addColumnDefinition(0.5);
     grid.addColumnDefinition(0.5);
     grid.addRowDefinition(0.72);
@@ -602,7 +632,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     panel.addControl(grid);
 
     const playerTexts = dartScore.players.map((player, index) => {
-      const text = new GUI.TextBlock(`dartPlayer${index + 1}Text`);
+      const text = new GUI.TextBlock(`dartPlayer${index + 1}Text_${gameId}`);
       text.color = "white";
       text.fontFamily = "Arial";
       text.fontSize = 66;
@@ -613,7 +643,7 @@ function setupDartInteractions(scene, xr, options = {}) {
       return text;
     });
 
-    const divider = new GUI.Rectangle("dartGameDivider");
+    const divider = new GUI.Rectangle(`dartGameDivider_${gameId}`);
     divider.width = "2px";
     divider.height = "72%";
     divider.color = "#d8e6f3";
@@ -623,7 +653,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     divider.verticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
     panel.addControl(divider);
 
-    const statusText = new GUI.TextBlock("dartGameStatusText");
+    const statusText = new GUI.TextBlock(`dartGameStatusText_${gameId}`);
     statusText.height = "28%";
     statusText.top = "36%";
     statusText.color = "#d8e6f3";
@@ -634,7 +664,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     statusText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
     panel.addControl(statusText);
 
-    const restartButton = GUI.Button.CreateSimpleButton("dartGameRestartButton", "Restart");
+    const restartButton = GUI.Button.CreateSimpleButton(`dartGameRestartButton_${gameId}`, "Restart");
     restartButton.width = "24%";
     restartButton.height = "16%";
     restartButton.top = "36%";
@@ -649,7 +679,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     restartButton.textBlock.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
     restartButton.textBlock.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_CENTER;
     restartButton.onPointerUpObservable.add(() => {
-      resetDartGame();
+      resetDartGame(gameId);
     });
     panel.addControl(restartButton);
 
@@ -659,10 +689,11 @@ function setupDartInteractions(scene, xr, options = {}) {
     dartScore.playerTexts = playerTexts;
     dartScore.statusText = statusText;
     dartScore.restartButton = restartButton;
-    updateDartGameDisplay("Player 1 throws");
+    updateDartGameDisplay(gameId, "Player 1 throws");
   }
 
-  function resetDartGame() {
+  function resetDartGame(gameId = defaultDartGameId) {
+    const dartScore = getDartGame(gameId);
     dartScore.activePlayer = 0;
     dartScore.turnThrows = 0;
     dartScore.gameOver = false;
@@ -673,12 +704,13 @@ function setupDartInteractions(scene, xr, options = {}) {
       dartScore.hitText.text = "Ready";
     }
 
-    updateDartGameDisplay("Player 1 throws");
-    emitDartGameState(true);
+    updateDartGameDisplay(gameId, "Player 1 throws");
+    emitDartGameState(gameId, true);
     console.log("[DART] Game restarted");
   }
 
-  function updateDartGameDisplay(status = null) {
+  function updateDartGameDisplay(gameId = defaultDartGameId, status = null) {
+    const dartScore = getDartGame(gameId);
     if (!dartScore.playerTexts.length || !dartScore.statusText) return;
 
     for (let index = 0; index < dartScore.players.length; index += 1) {
@@ -691,25 +723,27 @@ function setupDartInteractions(scene, xr, options = {}) {
     const player = dartScore.players[dartScore.activePlayer];
     const throwLabel = `Dart ${dartScore.turnThrows + 1}/${dartScore.throwsPerTurn}`;
     dartScore.statusText.text = status || `${player.name} throws\n${throwLabel}`;
-    emitDartGameState();
+    emitDartGameState(gameId);
   }
 
-  function findDartBoardRoot() {
+  function findDartBoardRoots() {
+    const roots = new Set();
     for (const mesh of scene.meshes) {
       const boardRoot = getDartBoardRoot(mesh);
-      if (boardRoot) return boardRoot;
+      if (boardRoot) roots.add(boardRoot);
     }
-    return null;
+    return [...roots];
   }
 
   function initializeDartGameDisplay() {
-    const boardRoot = findDartBoardRoot();
-    if (boardRoot) {
+    for (const boardRoot of findDartBoardRoots()) {
       ensureDartScoreDisplay(boardRoot, null);
     }
   }
 
   function registerDartThrow(root) {
+    const gameId = getDartGameId(root);
+    const dartScore = getDartGame(gameId);
     if (!root || dartScore.gameOver) return;
 
     const throwingPlayerIndex = dartScore.activePlayer;
@@ -727,16 +761,19 @@ function setupDartInteractions(scene, xr, options = {}) {
       status = `${dartScore.players[dartScore.activePlayer].name} throws`;
     }
 
-    updateDartGameDisplay(status);
+    updateDartGameDisplay(gameId, status);
   }
 
-  function advanceDartTurn(status = null) {
+  function advanceDartTurn(gameId = defaultDartGameId, status = null) {
+    const dartScore = getDartGame(gameId);
     dartScore.turnThrows = 0;
     dartScore.activePlayer = (dartScore.activePlayer + 1) % dartScore.players.length;
-    updateDartGameDisplay(status || `${dartScore.players[dartScore.activePlayer].name} throws`);
+    updateDartGameDisplay(gameId, status || `${dartScore.players[dartScore.activePlayer].name} throws`);
   }
 
   function recordDartBoardScore(root, boardRoot, pick) {
+    const gameId = getDartGameId(boardRoot);
+    const dartScore = getDartGame(gameId);
     const score = getDartBoardScore(boardRoot, pick);
     ensureDartScoreDisplay(boardRoot, pick);
 
@@ -750,7 +787,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     } else if (nextRemaining < 0) {
       status = `${player.name}: Bust!`;
       if (dartScore.activePlayer === scoringPlayerIndex) {
-        advanceDartTurn(`${player.name}: Bust!`);
+        advanceDartTurn(gameId, `${player.name}: Bust!`);
       }
     } else {
       player.remaining = nextRemaining;
@@ -768,7 +805,7 @@ function setupDartInteractions(scene, xr, options = {}) {
     }
 
     if (!(nextRemaining < 0 && !dartScore.gameOver)) {
-      updateDartGameDisplay(status);
+      updateDartGameDisplay(gameId, status);
     }
     console.log(`[DART] ${status}`);
     return score;
@@ -1049,10 +1086,12 @@ function setupDartInteractions(scene, xr, options = {}) {
 
   registerSharedStateReady(scene, (controls) => {
     const seenDarts = new Set();
+    const seenGameIds = new Set();
     for (const mesh of scene.meshes) {
       const root = getDartRoot(mesh);
       if (!root || seenDarts.has(root)) continue;
       seenDarts.add(root);
+      seenGameIds.add(getDartGameId(root));
       const key = getDartStateKey(root);
       if (!key) continue;
 
@@ -1097,29 +1136,38 @@ function setupDartInteractions(scene, xr, options = {}) {
       });
     }
 
-    controls.subscribe("dartGame", "default", (state) => {
-      if (!state || !Array.isArray(state.players)) return;
+    for (const mesh of scene.meshes) {
+      const boardRoot = getDartBoardRoot(mesh);
+      if (!boardRoot) continue;
+      seenGameIds.add(getDartGameId(boardRoot));
+    }
 
-      applyingRemoteDartGameState = true;
-      try {
-        dartScore.activePlayer = Number.isFinite(state.activePlayer) ? state.activePlayer : 0;
-        dartScore.turnThrows = Number.isFinite(state.turnThrows) ? state.turnThrows : 0;
-        dartScore.throwsPerTurn = Number.isFinite(state.throwsPerTurn)
-          ? state.throwsPerTurn
-          : dartScore.throwsPerTurn;
-        dartScore.gameOver = !!state.gameOver;
-        dartScore.players = state.players.map((player, index) => ({
-          name: player?.name || `Player ${index + 1}`,
-          remaining: Number.isFinite(player?.remaining) ? player.remaining : 300,
-        }));
-        if (dartScore.hitText && typeof state.hitText === "string") {
-          dartScore.hitText.text = state.hitText;
+    for (const gameId of seenGameIds) {
+      controls.subscribe("dartGame", gameId, (state) => {
+        if (!state || !Array.isArray(state.players)) return;
+
+        const dartScore = getDartGame(gameId);
+        applyingRemoteDartGameState = true;
+        try {
+          dartScore.activePlayer = Number.isFinite(state.activePlayer) ? state.activePlayer : 0;
+          dartScore.turnThrows = Number.isFinite(state.turnThrows) ? state.turnThrows : 0;
+          dartScore.throwsPerTurn = Number.isFinite(state.throwsPerTurn)
+            ? state.throwsPerTurn
+            : dartScore.throwsPerTurn;
+          dartScore.gameOver = !!state.gameOver;
+          dartScore.players = state.players.map((player, index) => ({
+            name: player?.name || `Player ${index + 1}`,
+            remaining: Number.isFinite(player?.remaining) ? player.remaining : 300,
+          }));
+          if (dartScore.hitText && typeof state.hitText === "string") {
+            dartScore.hitText.text = state.hitText;
+          }
+          updateDartGameDisplay(gameId, typeof state.statusText === "string" ? state.statusText : null);
+        } finally {
+          applyingRemoteDartGameState = false;
         }
-        updateDartGameDisplay(typeof state.statusText === "string" ? state.statusText : null);
-      } finally {
-        applyingRemoteDartGameState = false;
-      }
-    });
+      });
+    }
   });
 
   initializeDartGameDisplay();
