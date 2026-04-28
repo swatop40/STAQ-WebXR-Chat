@@ -83,9 +83,20 @@
         <h1>please choose your desired environment</h1>
 
         <div id="sceneButtons">
-          <button class="sceneButton" data-scene="start">Start (Test Scene)</button>
-          <button class="sceneButton" data-scene="bar">Bar Scene</button>
-          <button class="sceneButton" data-scene="parking">Parking Scene</button>
+          <button class="sceneButton" data-scene="start">
+            Start Scene / Testing Scene
+             <div id="count-start" style="font-size:0.85rem; opacity:0.8;">0/10</div>
+          </button>
+
+          <button class="sceneButton" data-scene="bar">
+            Bar and Kareoke Scene
+            <div id="count-bar" style="font-size:0.85rem; opacity:0.8;">0/10</div>
+          </button>
+
+          <button class="sceneButton" data-scene="parking">
+            Parking Lot Scene
+            <div id="count-parking" style="font-size:0.85rem; opacity:0.8;">0/10</div>
+          </button>
         </div>
       </div>
     </div>
@@ -97,6 +108,31 @@
       import { loadScene as loadStartScene } from "/src/scenes/start.js";
       import { loadScene as loadBarScene } from "/src/scenes/bar.js";
       import { loadScene as loadParkingScene } from "/src/scenes/parking-WIP.js";
+      import { io } from "socket.io-client";
+
+      const lobbySocket = io();
+
+      lobbySocket.on("sceneCounts", (counts) => {
+        const max = 10;
+
+        const scenes = ["start", "bar", "parking"];
+        scenes.forEach((scene) => {
+          const count = counts?.[scene] || 0;
+          const label = document.getElementById(`count-${scene}`);
+          const btn = document.querySelector(`button[data-scene="${scene}"]`);
+
+          if (label) {
+            label.textContent = `${count}/${max}`;
+          }
+
+          if (btn) {
+            btn.disabled = count >= max;
+            btn.style.background = count >= max ? "#6b7280" : "#2563eb";
+            btn.style.cursor = count >= max ? "not-allowed" : "pointer";
+          }
+        });
+      });
+
 
       const overlay = document.getElementById("joinOverlay");
       const buttons = document.querySelectorAll(".sceneButton");
@@ -117,14 +153,32 @@
             button.disabled = true;
           });
 
-          setSceneLoader(loadScene);
-          overlay.style.display = "none";
+          try {
+            setSceneLoader(loadScene);
+            await launchApp({
+              playerName: sessionStorage.getItem("nameInput") || "Player",
+              sceneId: sceneKey,
+            });
 
-          await launchApp({
-            playerName: sessionStorage.getItem("nameInput") || "Player",
-          });
+            overlay.style.display = "none";
+            lobbySocket.disconnect();
+          } catch (error) {
+            if (error?.code === "SCENE_FULL") {
+              alert(
+                `The ${error.sceneId || sceneKey} scene is full (${error.max ?? "max"} players). Please choose another scene.`
+              );
+            } else {
+              console.error("[JOIN] Failed to launch selected scene", error);
+              alert("Could not join that scene right now. Please try again.");
+            }
+
+            buttons.forEach((button) => {
+              button.disabled = false;
+            });
+          }
         });
       });
     </script>
+
   </body>
 </html>

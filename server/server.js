@@ -25,6 +25,14 @@ const sceneState = {
   tv: {},
   picture: {},
 };
+
+const SCENE_CAPACITY = {
+  start: 10,
+  bar: 10,
+  parking: 10,
+};
+
+
 const tvDebugPlaybackByKey = new Map();
 const karaokeSongsDir = path.resolve(process.cwd(), "public", "karaoke-songs");
 const supportedKaraokeExtensions = new Set([".mp4", ".webm", ".mov", ".m4v"]);
@@ -143,7 +151,7 @@ function clearDisconnectedOwnership(disconnectedId) {
         updatedAt: Date.now(),
       };
 
-      io.emit("scene-state-update", {
+      io.to(players.get(disconnectedId)?.room).emit("scene-state-update", {
         scope,
         key,
         state: sceneState[scope][key],
@@ -160,6 +168,38 @@ function resetSharedRoomState() {
   sceneState.tv = {};
   sceneState.picture = {};
   tvDebugPlaybackByKey.clear();
+}
+
+function getSceneCounts() {
+  const counts = {
+    start: 0,
+    bar: 0,
+    parking: 0,
+  };
+
+  for (const player of players.values()) {
+    const room = player.room;
+    if (counts[room] !== undefined) {
+      counts[room]++;
+    }
+  }
+
+  return counts;
+}
+
+function broadcastSceneCounts() {
+  io.emit("sceneCounts", getSceneCounts());
+}
+
+function RelayToSelectedRoom(fromId, targetId) {
+  const fromPlayer = players.get(fromId);
+  const targetPlayer = players.get(targetId);
+
+  if (!fromPlayer || !targetPlayer) return false;
+  if (!fromPlayer.room || fromPlayer.room !== targetPlayer.room) return false;
+  if (!SCENE_CAPACITY[fromPlayer.room]) return false;
+
+  return true;
 }
 
 function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
@@ -182,7 +222,9 @@ function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
   if (!isPlaying) return;
 
   const player = players.get(socketId);
-  io.emit("tv-debug-message", {
+  if (!player?.room) return;
+
+  io.to(player.room).emit("tv-debug-message", {
     tvKey: update.key,
     senderId: socketId,
     senderName: player?.name || "Player",
@@ -195,6 +237,11 @@ function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
+  
+  socket.emit("sceneCounts", getSceneCounts());
+
+  socket.join("lobby");
+  socket.currentRoom = "lobby";
 
   players.set(socket.id, {
   id: socket.id,
@@ -222,14 +269,40 @@ io.on("connection", (socket) => {
   },
 });
 
-  socket.emit("init", {
-    selfId: socket.id,
-    players: Object.fromEntries(players),
-    chatMessages,
-    sceneState,
-  });
+  socket.on("joinScene", (sceneId) => {
+      const player = players.get(socket.id);
+      if (!player) return;
 
-  socket.broadcast.emit("playerJoined", players.get(socket.id));
+      const max = SCENE_CAPACITY[sceneId] || 9999;
+
+      const currentCount = [...players.values()].filter(p => p.room === sceneId).length;
+
+      if (currentCount >= max) {
+        socket.emit("sceneFull", { sceneId, max });
+        return;
+      }
+
+      const prevRoom = socket.currentRoom || "lobby";
+      socket.leave(prevRoom);
+
+      socket.join(sceneId);
+      socket.currentRoom = sceneId;
+      player.room = sceneId;
+
+      const roomPlayers = Object.fromEntries(
+        [...players.entries()].filter(([_, p]) => p.room === sceneId)
+      );
+
+      socket.emit("init", {
+        selfId: socket.id,
+        players: roomPlayers,
+        chatMessages,
+        sceneState,
+      });
+
+      socket.to(sceneId).emit("playerJoined", player);
+      broadcastSceneCounts();
+    });
 
   socket.on("pose", (data) => {
   const p = players.get(socket.id);
@@ -348,7 +421,7 @@ io.on("connection", (socket) => {
       chatMessages.shift();
     }
 
-    io.emit("chat-message", message);
+    io.to(player.room).emit("chat-message", message);
   });
 
   socket.on("scene-state-update", (payload, ack) => {
@@ -360,7 +433,8 @@ io.on("connection", (socket) => {
 
     const nextState = applySceneStateUpdate(update, socket.id);
     maybeBroadcastTVDebugMessage(socket.id, update, nextState);
-    io.emit("scene-state-update", {
+    const player = players.get(socket.id);
+    io.to(player.room).emit("scene-state-update", {
       scope: update.scope,
       key: update.key,
       state: nextState,
@@ -376,7 +450,7 @@ io.on("connection", (socket) => {
 
   socket.on("tv-debug-message", (payload) => {
     const player = players.get(socket.id);
-    io.emit("tv-debug-message", {
+    io.to(player.room).emit("tv-debug-message", {
       tvKey: typeof payload?.tvKey === "string" ? payload.tvKey.slice(0, 120) : "",
       senderId: socket.id,
       senderName: player?.name || "Player",
@@ -391,6 +465,8 @@ io.on("connection", (socket) => {
 
 // When a player sends a WebRTC offer
   socket.on("webrtc-offer", ({ targetId, offer }) => {
+    if (!RelayToSelectedRoom(socket.id, targetId)) return;
+
     io.to(targetId).emit("webrtc-offer", {
     fromId: socket.id,
     offer,
@@ -399,6 +475,8 @@ io.on("connection", (socket) => {
 
 // When a player sends an answer
   socket.on("webrtc-answer", ({ targetId, answer }) => {
+    if (!RelayToSelectedRoom(socket.id, targetId)) return;
+
     io.to(targetId).emit("webrtc-answer", {
     fromId: socket.id,
     answer,
@@ -407,6 +485,8 @@ io.on("connection", (socket) => {
 
 // ICE candidate exchange
   socket.on("webrtc-ice-candidate", ({ targetId, candidate }) => {
+    if (!RelayToSelectedRoom(socket.id, targetId)) return;
+
     io.to(targetId).emit("webrtc-ice-candidate", {
     fromId: socket.id,
     candidate,
@@ -420,13 +500,26 @@ io.on("connection", (socket) => {
     if (players.size === 0) {
       resetSharedRoomState();
     }
-    io.emit("playerLeft", socket.id);
+    const room = socket.currentRoom;
+    if (room) {
+     io.to(room).emit("playerLeft", socket.id);
+
+     broadcastSceneCounts();
+    }
   });
 });
 
 const TICK_HZ = 15;
 setInterval(() => {
-  io.emit("playersUpdate", Object.fromEntries(players));
+  const rooms = new Set([...players.values()].map(p => p.room));
+
+  for (const room of rooms) {
+    const roomPlayers = Object.fromEntries(
+      [...players.entries()].filter(([_, p]) => p.room === room)
+    );
+
+    io.to(room).emit("playersUpdate", roomPlayers);
+  }
 }, 1000 / TICK_HZ);
 
 const PORT = 3000;

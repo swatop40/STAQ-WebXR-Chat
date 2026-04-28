@@ -15,7 +15,10 @@ const socket = io({
   autoConnect: false,
 });
 
-socket.on("connect", () => console.log("[NET] Connected:", socket.id));
+socket.on("connect", () => {
+  selfId = socket.id;
+  console.log("[NET] Connected:", socket.id);
+});
 socket.on("connect_error", (err) => console.error("[NET] connect_error:", err.message));
 socket.on("disconnect", () => console.log("[NET] Disconnected"));
 
@@ -40,6 +43,117 @@ let playerName = "Player";
 let uiTexture = null;
 let appStarted = false;
 const remoteNameLabels = new Map();
+const SCENE_JOIN_TIMEOUT_MS = 10000;
+const AVATAR_CUSTOMIZATION_STORAGE_KEY = "avatarCustomization";
+
+function readStoredAvatarCustomization(name = "Player") {
+  if (typeof window === "undefined" || !window.sessionStorage) return null;
+
+  try {
+    const raw = window.sessionStorage.getItem(AVATAR_CUSTOMIZATION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return deserializeAvatarCustomization(parsed, name);
+  } catch (error) {
+    console.warn("[AVATAR] Failed to read stored customization", error);
+    return null;
+  }
+}
+
+function storeAvatarCustomization(customization) {
+  if (typeof window === "undefined" || !window.sessionStorage || !customization) return;
+
+  try {
+    const serialized = serializeAvatarCustomization(customization);
+    if (!serialized) return;
+    window.sessionStorage.setItem(
+      AVATAR_CUSTOMIZATION_STORAGE_KEY,
+      JSON.stringify(serialized)
+    );
+  } catch (error) {
+    console.warn("[AVATAR] Failed to store customization", error);
+  }
+}
+
+function ensureLocalAvatarCustomization() {
+  if (!localAvatarCustomization) {
+    localAvatarCustomization =
+      readStoredAvatarCustomization(playerName) ||
+      createDefaultAvatarCustomization(playerName);
+  }
+
+  return localAvatarCustomization;
+}
+
+function waitForSocketConnect() {
+  if (socket.connected) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      socket.off("connect", onConnect);
+      socket.off("connect_error", onConnectError);
+    };
+
+    const onConnect = () => {
+      cleanup();
+      resolve();
+    };
+
+    const onConnectError = (error) => {
+      cleanup();
+      reject(error);
+    };
+
+    socket.on("connect", onConnect);
+    socket.on("connect_error", onConnectError);
+    socket.connect();
+  });
+}
+
+function requestSceneJoin(sceneId) {
+  const cleanSceneId = typeof sceneId === "string" ? sceneId.trim() : "";
+  if (!cleanSceneId) return Promise.resolve();
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      socket.off("init", onInit);
+      socket.off("sceneFull", onSceneFull);
+    };
+
+    const onInit = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+
+    const onSceneFull = ({ sceneId: fullSceneId, max }) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+
+      const error = new Error(`Scene ${fullSceneId || cleanSceneId} is full`);
+      error.code = "SCENE_FULL";
+      error.sceneId = fullSceneId || cleanSceneId;
+      error.max = max;
+      reject(error);
+    };
+
+    const timeoutId = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(new Error(`Timed out joining scene '${cleanSceneId}'`));
+    }, SCENE_JOIN_TIMEOUT_MS);
+
+    socket.on("init", onInit);
+    socket.on("sceneFull", onSceneFull);
+    socket.emit("joinScene", cleanSceneId);
+  });
+}
 
 function isMobileBrowser() {
   return /Android|iPad|iPhone|iPod/i.test(navigator.userAgent) ||
@@ -778,9 +892,7 @@ function createAvatarControls() {
       return [...AVATAR_FACE_OPTIONS];
     },
     getCurrentCustomization() {
-      if (!localAvatarCustomization) {
-        localAvatarCustomization = createDefaultAvatarCustomization(playerName);
-      }
+      ensureLocalAvatarCustomization();
 
       return {
         body: localAvatarCustomization.body?.toHexString?.() || null,
@@ -794,9 +906,7 @@ function createAvatarControls() {
       };
     },
     setPartColor(part, hexColor) {
-      if (!localAvatarCustomization) {
-        localAvatarCustomization = createDefaultAvatarCustomization(playerName);
-      }
+      ensureLocalAvatarCustomization();
 
       if (!["body", "head", "arms", "legs", "hands", "badge", "badgeText"].includes(part)) {
         return null;
@@ -811,6 +921,7 @@ function createAvatarControls() {
       if (localAvatarParts) {
         applyAvatarAppearance(localAvatarParts, playerName, "local", localAvatarCustomization);
       }
+      storeAvatarCustomization(localAvatarCustomization);
 
       return localAvatarCustomization[part].toHexString();
     },
@@ -819,14 +930,13 @@ function createAvatarControls() {
         return null;
       }
 
-      if (!localAvatarCustomization) {
-        localAvatarCustomization = createDefaultAvatarCustomization(playerName);
-      }
+      ensureLocalAvatarCustomization();
 
       localAvatarCustomization.faceExpression = expression;
       if (localAvatarParts) {
         applyAvatarAppearance(localAvatarParts, playerName, "local", localAvatarCustomization);
       }
+      storeAvatarCustomization(localAvatarCustomization);
       return localAvatarCustomization.faceExpression;
     },
     resetCustomization() {
@@ -834,6 +944,7 @@ function createAvatarControls() {
       if (localAvatarParts) {
         applyAvatarAppearance(localAvatarParts, playerName, "local", localAvatarCustomization);
       }
+      storeAvatarCustomization(localAvatarCustomization);
       return this.getCurrentCustomization();
     },
     autoHeightFromXR() {
@@ -1725,6 +1836,10 @@ async function ensureRemoteMesh(scene, id) {
   const pending = pendingRemoteMeshes.get(id);
   if (pending) return await pending;
 
+  if (remoteMeshes.has(id)) {
+  return remoteMeshes.get(id);
+}
+
   const creationPromise = (async () => {
     await loadAvatarTemplates(scene);
 
@@ -1918,9 +2033,7 @@ async function ensureLocalAvatar(scene) {
     bodyYaw: 0,
   };
 
-  if (!localAvatarCustomization) {
-    localAvatarCustomization = createDefaultAvatarCustomization(playerName);
-  }
+  ensureLocalAvatarCustomization();
   applyAvatarAppearance(localAvatarParts, playerName, "local", localAvatarCustomization);
 
   const mirrorTex = scene?.mirrorTex;
@@ -2111,11 +2224,18 @@ socket.on("init", async ({ selfId: id, players, chatMessages, sceneState }) => {
 
   if (!sceneRef) return;
 
-  const otherPlayers = Object.values(players || {}).filter(
-    (p) => p?.id && p.id !== selfId
-  );
+  for (const [id, mesh] of remoteMeshes.entries()) {
+  mesh.dispose?.();
+}
+remoteMeshes.clear();
 
-  await Promise.all(otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id)));
+const otherPlayers = Object.values(players || {}).filter(
+      (p) => p && p.id && p.id !== selfId
+    );
+
+    await Promise.all(
+      otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id))
+    );
   logConnectedPlayers("after init");
 });
 
@@ -2170,6 +2290,8 @@ socket.on("playerLeft", (id) => {
 socket.on("playersUpdate", async (players) => {
   if (!sceneRef || !players) return;
 
+  const activeIds = new Set(Object.keys(players));
+
   for (const [id, p] of Object.entries(players)) {
     if (id === selfId) continue;
 
@@ -2181,6 +2303,7 @@ socket.on("playersUpdate", async (players) => {
     }
 
     ensureRemoteNameLabel(id, mesh, p.name || "Player");
+
     applyAvatarAppearance(
       mesh.metadata,
       p.name || "Player",
@@ -2209,6 +2332,13 @@ socket.on("playersUpdate", async (players) => {
     });
 
     updateRemoteAudioVolume(id);
+  }
+
+  for (const [id, mesh] of remoteMeshes.entries()) {
+    if (!activeIds.has(id)) {
+      mesh.dispose?.();
+      remoteMeshes.delete(id);
+    }
   }
 });
 
@@ -2295,8 +2425,18 @@ export async function launchApp(options = {}) {
   if (options.playerName) {
     playerName = options.playerName;
   }
-  if (!localAvatarCustomization) {
-    localAvatarCustomization = createDefaultAvatarCustomization(playerName);
+  ensureLocalAvatarCustomization();
+
+  const sceneId = typeof options.sceneId === "string" ? options.sceneId.trim() : "";
+
+  try {
+    await waitForSocketConnect();
+    if (sceneId) {
+      await requestSceneJoin(sceneId);
+    }
+  } catch (error) {
+    appStarted = false;
+    throw error;
   }
 
   try {
@@ -2357,8 +2497,6 @@ export async function launchApp(options = {}) {
   applyPlayerVolume();
 
   await ensureLocalAvatar(scene);
-
-  socket.connect();
 
   if (shouldShowDebugLayer()) {
     scene.debugLayer.show();
@@ -2589,11 +2727,17 @@ const joinButton = document.getElementById("joinButton");
 async function handleJoin() {
   const enteredName = nameInput.value.trim();
   playerName = enteredName || `Player-${Math.floor(Math.random() * 1000)}`;
-  localAvatarCustomization = createDefaultAvatarCustomization(playerName);
+  localAvatarCustomization =
+    readStoredAvatarCustomization(playerName) ||
+    createDefaultAvatarCustomization(playerName);
+  storeAvatarCustomization(localAvatarCustomization);
 
   joinOverlay.style.display = "none";
 
   await unlockAudio();
+
+
+
   await launchApp();
 }
 
