@@ -27,6 +27,13 @@ const DART_GAME_B_PANEL_TRANSFORM = {
   position: new Vector3(5.32, 2.11, -10.99),
   rotation: new Vector3(0, 3.141592653589793, 0),
 };
+const START_MIRROR_TRANSFORM = {
+  position: new Vector3(7.29, 1, 11),
+  rotation: new Vector3(0, 0, 0),
+  scaling: new Vector3(1, 1, 1),
+  width: 4.5,
+  height: 7.2,
+};
 const TEST_ROOM_OBJECTS = [
   {
     fileName: "table.glb",
@@ -301,7 +308,7 @@ export async function startScene(engine) {
     playerSpawn,
   } = createBaseScene(engine);
 
-  const mirror = createMirror(scene);
+  const mirror = createMirror(scene, START_MIRROR_TRANSFORM);
 
   const roomResult = await loadSceneModel(scene, "test-room.glb");
   for (const mesh of roomResult.meshes) {

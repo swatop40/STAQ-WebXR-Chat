@@ -262,20 +262,49 @@ export function createStaticWall(scene, name, options, position) {
   return wall;
 }
 
-export function createMirror(scene, options = {}) {
-  const legacyPosition = options instanceof Vector3 ? options : null;
+function copyVector3Like(target, value) {
+  if (!value) return;
+
+  if (typeof value.copyFrom === "function") {
+    target.copyFrom(value);
+    return;
+  }
+
+  target.set(
+    value.x ?? target.x,
+    value.y ?? target.y,
+    value.z ?? target.z
+  );
+}
+
+export function createMirror(
+  scene,
+  optionsOrPosition = {},
+  legacyRotation = null,
+  legacyScaling = null
+) {
+  const usingLegacyTransformArgs = optionsOrPosition instanceof Vector3;
+  const options = usingLegacyTransformArgs
+    ? {
+      position: optionsOrPosition,
+      rotation: legacyRotation,
+      scaling: legacyScaling,
+    }
+    : optionsOrPosition;
+
   const {
-    position = legacyPosition || new Vector3(7.29, 1, 11),
+    position = new Vector3(7.29, 1, 11),
     rotation = new Vector3(0, 0, 0),
     scaling = new Vector3(1, 1, 1),
+    scale = null,
     width = 4.5,
     height = 7.2,
-  } = legacyPosition ? {} : options;
+  } = options;
 
   const mirror = MeshBuilder.CreatePlane("mirror", { width, height }, scene);
-  mirror.position.copyFrom(position);
-  mirror.rotation.copyFrom(rotation);
-  mirror.scaling.copyFrom(scaling);
+  copyVector3Like(mirror.position, position);
+  copyVector3Like(mirror.rotation, rotation);
+  copyVector3Like(mirror.scaling, scale || scaling);
   return mirror;
 }
 
