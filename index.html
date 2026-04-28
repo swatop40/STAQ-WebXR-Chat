@@ -100,13 +100,31 @@
 
     <canvas id="renderCanvas"></canvas>
     <script type="module">
-      const joinButton = document.getElementById("joinButton");
-       const nameInput = document.getElementById("nameInput");
+      import { isDisplayNameAllowed } from "./src/utils/textModeration.js";
 
-       joinButton.addEventListener("click", () => {
-     sessionStorage.setItem("nameInput", nameInput.value || "Player");
-     window.location.href = "choose-scene.html";
-});
-</script>
+      const joinButton = document.getElementById("joinButton");
+      const nameInput = document.getElementById("nameInput");
+
+      function handleNameSubmit() {
+        const enteredName = String(nameInput.value || "");
+        const nameCheck = isDisplayNameAllowed(enteredName);
+        if (!nameCheck.allowed) {
+          alert(nameCheck.reason || "Please choose a different name.");
+          nameInput.focus();
+          nameInput.select?.();
+          return;
+        }
+
+        sessionStorage.setItem("nameInput", enteredName || "Player");
+        window.location.href = "choose-scene.html";
+      }
+
+      joinButton.addEventListener("click", handleNameSubmit);
+      nameInput.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          handleNameSubmit();
+        }
+      });
+    </script>
   </body>
 </html>

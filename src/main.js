@@ -3,6 +3,11 @@ import * as GUI from "babylonjs-gui";
 import { io } from "socket.io-client";
 
 import { startScene } from "./scenes/start.js";
+import {
+  isDisplayNameAllowed,
+  sanitizeChatText,
+  sanitizeDisplayName,
+} from "./utils/textModeration.js";
 
 let externalSceneLoader = null;
 
@@ -700,11 +705,15 @@ function addServerChatMessage(message) {
   if (!message?.id || !message?.text) return;
   if (serverChatMessages.some((entry) => entry.id === message.id)) return;
 
+  const safeSenderName = sanitizeDisplayName(message.senderName || "Player");
+  const safeText = sanitizeChatText(message.text);
+  if (!safeText) return;
+
   serverChatMessages.push({
     id: message.id,
     senderId: message.senderId || "",
-    senderName: message.senderName || "Player",
-    text: String(message.text || ""),
+    senderName: safeSenderName,
+    text: safeText,
     createdAt: Number.isFinite(message.createdAt) ? message.createdAt : Date.now(),
   });
 
@@ -810,7 +819,7 @@ function createChatControls() {
       return serverChatMessages.map((message) => ({ ...message }));
     },
     sendMessage(text) {
-      const cleanText = String(text || "").replace(/\s+/g, " ").trim().slice(0, 240);
+      const cleanText = sanitizeChatText(text);
       if (!cleanText || !socket.connected) return false;
 
       socket.emit("chat-message", { text: cleanText });
@@ -2423,7 +2432,14 @@ export async function launchApp(options = {}) {
   appStarted = true;
 
   if (options.playerName) {
-    playerName = options.playerName;
+    const nameCheck = isDisplayNameAllowed(options.playerName);
+    if (!nameCheck.allowed) {
+      appStarted = false;
+      const error = new Error(nameCheck.reason || "Invalid player name.");
+      error.code = "INVALID_PLAYER_NAME";
+      throw error;
+    }
+    playerName = sanitizeDisplayName(options.playerName, playerName);
   }
   ensureLocalAvatarCustomization();
 
@@ -2725,8 +2741,18 @@ const nameInput = document.getElementById("nameInput");
 const joinButton = document.getElementById("joinButton");
 
 async function handleJoin() {
-  const enteredName = nameInput.value.trim();
-  playerName = enteredName || `Player-${Math.floor(Math.random() * 1000)}`;
+  const enteredName = String(nameInput.value || "");
+  const nameCheck = isDisplayNameAllowed(enteredName);
+  if (!nameCheck.allowed) {
+    alert(nameCheck.reason || "Please choose a different name.");
+    nameInput.focus();
+    nameInput.select?.();
+    return;
+  }
+
+  const fallbackName = `Player-${Math.floor(Math.random() * 1000)}`;
+  playerName = sanitizeDisplayName(enteredName, fallbackName);
+  nameInput.value = playerName;
   localAvatarCustomization =
     readStoredAvatarCustomization(playerName) ||
     createDefaultAvatarCustomization(playerName);
