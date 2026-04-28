@@ -27,9 +27,9 @@ const sceneState = {
 };
 
 const SCENE_CAPACITY = {
-  start: 3,
-  bar: 3,
-  parking: 3,
+  start: 10,
+  bar: 10,
+  parking: 10,
 };
 
 
@@ -191,6 +191,17 @@ function broadcastSceneCounts() {
   io.emit("sceneCounts", getSceneCounts());
 }
 
+function RelayToSelectedRoom(fromId, targetId) {
+  const fromPlayer = players.get(fromId);
+  const targetPlayer = players.get(targetId);
+
+  if (!fromPlayer || !targetPlayer) return false;
+  if (!fromPlayer.room || fromPlayer.room !== targetPlayer.room) return false;
+  if (!SCENE_CAPACITY[fromPlayer.room]) return false;
+
+  return true;
+}
+
 function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
   if (update?.scope !== "tv" || !update.key || !nextState) return;
 
@@ -211,7 +222,9 @@ function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
   if (!isPlaying) return;
 
   const player = players.get(socketId);
-  io.emit("tv-debug-message", {
+  if (!player?.room) return;
+
+  io.to(player.room).emit("tv-debug-message", {
     tvKey: update.key,
     senderId: socketId,
     senderName: player?.name || "Player",
@@ -452,6 +465,8 @@ io.on("connection", (socket) => {
 
 // When a player sends a WebRTC offer
   socket.on("webrtc-offer", ({ targetId, offer }) => {
+    if (!RelayToSelectedRoom(socket.id, targetId)) return;
+
     io.to(targetId).emit("webrtc-offer", {
     fromId: socket.id,
     offer,
@@ -460,6 +475,8 @@ io.on("connection", (socket) => {
 
 // When a player sends an answer
   socket.on("webrtc-answer", ({ targetId, answer }) => {
+    if (!RelayToSelectedRoom(socket.id, targetId)) return;
+
     io.to(targetId).emit("webrtc-answer", {
     fromId: socket.id,
     answer,
@@ -468,6 +485,8 @@ io.on("connection", (socket) => {
 
 // ICE candidate exchange
   socket.on("webrtc-ice-candidate", ({ targetId, candidate }) => {
+    if (!RelayToSelectedRoom(socket.id, targetId)) return;
+
     io.to(targetId).emit("webrtc-ice-candidate", {
     fromId: socket.id,
     candidate,
