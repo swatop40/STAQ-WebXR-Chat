@@ -17,6 +17,16 @@ import {
 const TABLE_POSITION = new Vector3(1.23, 1.59, 8.87);
 const TABLE_ROTATION = new Vector3(0, Math.PI / 2, 0);
 const TABLE_TOP_Y = 1.76;
+const DART_GAME_A_ID = "test-room-darts-left";
+const DART_GAME_B_ID = "test-room-darts-right";
+const DART_GAME_A_PANEL_TRANSFORM = {
+  position: new Vector3(-5.49, 2.11, 10.99),
+  rotation: Vector3.Zero(),
+};
+const DART_GAME_B_PANEL_TRANSFORM = {
+  position: new Vector3(5.32, 2.11, -10.99),
+  rotation: new Vector3(0, 3.141592653589793, 0),
+};
 const TEST_ROOM_OBJECTS = [
   {
     fileName: "table.glb",
@@ -52,7 +62,11 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, -Math.PI / 2, 0),
     scaling: new Vector3(0.7, 0.7, 0.7),
     afterPlace: (result) => {
-      configureDartBoardTarget(result, { forceOpaqueTexture: true });
+      configureDartBoardTarget(result, {
+        forceOpaqueTexture: true,
+        gameId: DART_GAME_A_ID,
+        panelTransform: DART_GAME_A_PANEL_TRANSFORM,
+      });
     },
   },
   {
@@ -61,7 +75,9 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result);
+      configureThrowableDart(result, {
+        gameId: DART_GAME_A_ID,
+      });
     },
   },
   {
@@ -70,7 +86,44 @@ const TEST_ROOM_OBJECTS = [
     rotation: new Vector3(0, 0, -Math.PI / 6),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result);
+      configureThrowableDart(result, {
+        gameId: DART_GAME_A_ID,
+      });
+    },
+  },
+  {
+    fileName: "dart-target.glb",
+    position: new Vector3(6.949999809265137, 2.109999895095825, -10.975337982177734),
+    rotation: new Vector3(0, Math.PI / 2, 0),
+    scaling: new Vector3(0.7, 0.7, 0.7),
+    afterPlace: (result) => {
+      configureDartBoardTarget(result, {
+        forceOpaqueTexture: true,
+        gameId: DART_GAME_B_ID,
+        panelTransform: DART_GAME_B_PANEL_TRANSFORM,
+      });
+    },
+  },
+  {
+    fileName: "dart-blue.glb",
+    position: new Vector3(2.62, 1.76, 9.22),
+    rotation: new Vector3(0, Math.PI / 5, 0),
+    scaling: new Vector3(0.19, 0.19, 0.19),
+    afterPlace: (result) => {
+      configureThrowableDart(result, {
+        gameId: DART_GAME_B_ID,
+      });
+    },
+  },
+  {
+    fileName: "dart-red.glb",
+    position: new Vector3(3.28, 1.76, 9.22),
+    rotation: new Vector3(0, 0, -Math.PI / 7),
+    scaling: new Vector3(0.19, 0.19, 0.19),
+    afterPlace: (result) => {
+      configureThrowableDart(result, {
+        gameId: DART_GAME_B_ID,
+      });
     },
   },
   {
@@ -81,8 +134,8 @@ const TEST_ROOM_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
-      xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      xrGrabOffset: new Vector3(.61, .461, -0.608),
+      xrGrabRotation: new Vector3(0, -0.24905477959908046, 0),
       desktopGrabOffset: new Vector3(-0.621, 1.776, -1.037),
       desktopGrabRotation: new Vector3(0, -0.24905477959908046, 0),
       
@@ -110,7 +163,7 @@ const TEST_ROOM_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, 3.84, 0.02),
+      xrGrabOffset: new Vector3(0, 2.5, -0.85),
       xrGrabRotation: new Vector3(0, 0, 0),
       desktopGrabOffset: new Vector3(1.648, 2.642, 3.543),
       desktopGrabRotation: new Vector3(0, 3.0182175423421165, 0),
@@ -124,7 +177,7 @@ const TEST_ROOM_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
+      xrGrabOffset: new Vector3(-.16, 4.59, 0.02),
       xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
       desktopGrabOffset: new Vector3(-1.740, 3.133, 1.101),
       desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
@@ -138,8 +191,8 @@ const TEST_ROOM_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0.04, 0, 0),
-      xrGrabRotation: new Vector3(0, 0, -Math.PI / 2),
+      xrGrabOffset: new Vector3(0.02, -3.31, -.54),
+      xrGrabRotation: new Vector3(0, 0, 0),
       desktopGrabOffset: new Vector3(-1.761, -1.068, -1.018),
       desktopGrabRotation: new Vector3(0, 0, -0.05458734417787241),
     },
@@ -262,10 +315,6 @@ export async function startScene(engine) {
     desktopKeys,
     playerHeight,
     playerSpawn,
-    dartGamePanelTransform: {
-      position: new Vector3(-5.49, 2.11, 10.99),
-      rotation: Vector3.Zero(),
-    },
   });
 
   createAvatarMirrorPanel(scene, mirror, {
