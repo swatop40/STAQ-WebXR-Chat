@@ -14,6 +14,11 @@ import {
   configureThrowableDart,
 } from "./sharedSceneFeatures.js";
 
+const DART_GAME_A_ID = "parking-darts";
+const DART_GAME_A_PANEL_TRANSFORM = {
+  position: new Vector3(-20, 3, -14),
+  rotation: new Vector3(0, 3.141592653589793, 0),
+};
 const PARKING_SCENE_OBJECTS = [
   {
     fileName: "chair.glb",
@@ -263,7 +268,11 @@ const PARKING_SCENE_OBJECTS = [
     rotation: new Vector3(0, 1.5707963267948966, 0),
     scaling: new Vector3(0.7, 0.7, 0.7),
     afterPlace: (result) => {
-      configureDartBoardTarget(result, { forceOpaqueTexture: true });
+      configureDartBoardTarget(result, {
+                    forceOpaqueTexture: true,
+                    gameId: DART_GAME_A_ID,
+                    panelTransform: DART_GAME_A_PANEL_TRANSFORM,
+                  });
     },
   },
   {
@@ -272,7 +281,9 @@ const PARKING_SCENE_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result);
+      configureThrowableDart(result, {
+                    gameId: DART_GAME_A_ID,
+                  });
     },
   },
   {
@@ -281,7 +292,9 @@ const PARKING_SCENE_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result);
+      configureThrowableDart(result, {
+                    gameId: DART_GAME_A_ID,
+                  });
     },
   },
   {
@@ -290,7 +303,9 @@ const PARKING_SCENE_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result);
+      configureThrowableDart(result, {
+                    gameId: DART_GAME_A_ID,
+                  });
     },
   },
   {
@@ -299,7 +314,9 @@ const PARKING_SCENE_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result);
+      configureThrowableDart(result, {
+                    gameId: DART_GAME_A_ID,
+                  });
     },
   },
   {
@@ -308,7 +325,9 @@ const PARKING_SCENE_OBJECTS = [
     rotation: new Vector3(0, Math.PI / 6, 0),
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
-      configureThrowableDart(result);
+      configureThrowableDart(result, {
+                    gameId: DART_GAME_A_ID,
+                  });
     },
   },
   {
@@ -318,8 +337,8 @@ const PARKING_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-        gameId: 1,
-      });
+                    gameId: DART_GAME_A_ID,
+                  });
     },
   },
   {
