@@ -79,8 +79,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
-      xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      xrGrabRotation: new Vector3(0, -0.24905477959908046, 0),
+      xrGrabOffset: new Vector3(.61, .461, -0.608),
       desktopGrabOffset: new Vector3(-0.621, 1.776, -1.037),
       desktopGrabRotation: new Vector3(0, -0.24905477959908046, 0),
       
@@ -109,8 +109,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
-      xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      xrGrabRotation: new Vector3(0, -0.24905477959908046, 0),
+      xrGrabOffset: new Vector3(.61, .461, -0.608),
       desktopGrabOffset: new Vector3(-0.621, 1.776, -1.037),
       desktopGrabRotation: new Vector3(0, -0.24905477959908046, 0),
       
@@ -124,8 +124,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
-      xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      xrGrabRotation: new Vector3(0, -0.24905477959908046, 0),
+      xrGrabOffset: new Vector3(.61, .461, -0.608),
       desktopGrabOffset: new Vector3(-0.621, 1.776, -1.037),
       desktopGrabRotation: new Vector3(0, -0.24905477959908046, 0),
       
@@ -209,8 +209,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, 3.84, 0.02),
       xrGrabRotation: new Vector3(0, 0, 0),
+      xrGrabOffset: new Vector3(0, 2.5, -0.85),
       desktopGrabOffset: new Vector3(1.648, 2.642, 3.543),
       desktopGrabRotation: new Vector3(0, 3.0182175423421165, 0),
     },
@@ -223,8 +223,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, 3.84, 0.02),
       xrGrabRotation: new Vector3(0, 0, 0),
+      xrGrabOffset: new Vector3(0, 2.5, -0.85),
       desktopGrabOffset: new Vector3(1.648, 2.642, 3.543),
       desktopGrabRotation: new Vector3(0, 3.0182175423421165, 0),
     },
@@ -237,8 +237,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, 3.84, 0.02),
       xrGrabRotation: new Vector3(0, 0, 0),
+      xrGrabOffset: new Vector3(0, 2.5, -0.85),
       desktopGrabOffset: new Vector3(1.648, 2.642, 3.543),
       desktopGrabRotation: new Vector3(0, 3.0182175423421165, 0),
     },
@@ -251,8 +251,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, 3.84, 0.02),
       xrGrabRotation: new Vector3(0, 0, 0),
+      xrGrabOffset: new Vector3(0, 2.5, -0.85),
       desktopGrabOffset: new Vector3(1.648, 2.642, 3.543),
       desktopGrabRotation: new Vector3(0, 3.0182175423421165, 0),
     },
@@ -265,8 +265,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
       xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      xrGrabOffset: new Vector3(-.16, 4.59, 0.02),
       desktopGrabOffset: new Vector3(-1.740, 3.133, 1.101),
       desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
     },
@@ -279,8 +279,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
       xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      xrGrabOffset: new Vector3(-.16, 4.59, 0.02),
       desktopGrabOffset: new Vector3(-1.740, 3.133, 1.101),
       desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
     },
@@ -293,8 +293,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
       xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      xrGrabOffset: new Vector3(-.16, 4.59, 0.02),
       desktopGrabOffset: new Vector3(-1.740, 3.133, 1.101),
       desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
     },
@@ -307,8 +307,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
       xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      xrGrabOffset: new Vector3(-.16, 4.59, 0.02),
       desktopGrabOffset: new Vector3(-1.740, 3.133, 1.101),
       desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
     },
@@ -321,8 +321,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0, -0.02, 0.02),
       xrGrabRotation: new Vector3(0, Math.PI / 2, 0),
+      xrGrabOffset: new Vector3(-.16, 4.59, 0.02),
       desktopGrabOffset: new Vector3(-1.740, 3.133, 1.101),
       desktopGrabRotation: new Vector3(0, Math.PI / 2, 0),
     },
@@ -335,8 +335,8 @@ const BAR_SCENE_OBJECTS = [
     interactable: true,
     interaction: {
       pickup: true,
-      xrGrabOffset: new Vector3(0.04, 0, 0),
-      xrGrabRotation: new Vector3(0, 0, -Math.PI / 2),
+      xrGrabRotation: new Vector3(0, 0, 0),
+      xrGrabOffset: new Vector3(0.02, -3.31, -.54),
       desktopGrabOffset: new Vector3(-1.761, -1.068, -1.018),
       desktopGrabRotation: new Vector3(0, 0, -0.05458734417787241),
     },
@@ -569,6 +569,56 @@ const BAR_SCENE_OBJECTS = [
       padding: new Vector3(0.1, 0.08, 0.1),
     },
   },
+  {
+    fileName: "Bar_Stool.glb",
+    position: new Vector3(8.689, 0.83, -0.386),
+    rotation: new Vector3(0, 0, 0),
+    scaling: new Vector3(0.275, 0.275, 0.275),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
+  },
+  {
+    fileName: "Bar_Stool.glb",
+    position: new Vector3(8.689, 0.83, -2.386),
+    rotation: new Vector3(0, 0, 0),
+    scaling: new Vector3(0.275, 0.275, 0.275),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
+  },
+  {
+    fileName: "Bar_Stool.glb",
+    position: new Vector3(8.689, 0.83, -4.386),
+    rotation: new Vector3(0, 0, 0),
+    scaling: new Vector3(0.275, 0.275, 0.275),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
+  },
+  {
+    fileName: "Bar_Stool.glb",
+    position: new Vector3(8.689, 0.83, -6.386),
+    rotation: new Vector3(0, 0, 0),
+    scaling: new Vector3(0.275, 0.275, 0.275),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.12, 0.08, 0.12),
+    },
+  },
+  {
+    fileName: "mic-stand.glb",
+    position: new Vector3(-2.289, 1.191, -6.423),
+    rotation: new Vector3(0, 4.71238898038469, 0),
+    scaling: new Vector3(0.13, 0.13, 0.13),
+    interactable: false,
+    staticCollider: {
+      padding: new Vector3(0.08, 0.14, 0.08),
+    },
+  },
 ];
 
 export async function startScene(engine) {
@@ -580,7 +630,19 @@ export async function startScene(engine) {
     playerSpawn,
   } = createBaseScene(engine);
 
-  const mirror = createMirror(scene);
+  const START_MIRROR_TRANSFORM = {
+  position: new Vector3(-5.337, 2, 3),
+  rotation: new Vector3(0, 4.71238898038469, 0),
+  scaling: new Vector3(1, 1, 1),
+  width: 4.5,
+  height: 7.2,
+};
+
+  const mirror = createMirror(scene, START_MIRROR_TRANSFORM);
+  createAvatarMirrorPanel(scene, mirror, {
+    position: new Vector3(2.26, 0.7, -1.21),
+    rotation: new Vector3(0, 0.5235987755982988, 0),
+  });
   await loadSceneModel(scene, "bar.glb");
   await placeSceneObjects(scene, BAR_SCENE_OBJECTS);
 
