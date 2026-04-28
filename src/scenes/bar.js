@@ -441,7 +441,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_A_ID,
+              gameId: DART_GAME_B_ID,
             });
     },
   },
@@ -452,7 +452,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_A_ID,
+              gameId: DART_GAME_B_ID,
             });
     },
   },
@@ -463,7 +463,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_A_ID,
+              gameId: DART_GAME_B_ID,
             });
     },
   },
@@ -474,7 +474,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_A_ID,
+              gameId: DART_GAME_B_ID,
             });
     },
   },
@@ -485,7 +485,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_A_ID,
+              gameId: DART_GAME_B_ID,
             });
     },
   },
@@ -496,7 +496,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_A_ID,
+              gameId: DART_GAME_B_ID,
             });
     },
   },
@@ -507,7 +507,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_B_ID,
+              gameId: DART_GAME_A_ID,
             });
     },
   },
@@ -518,7 +518,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_B_ID,
+              gameId: DART_GAME_A_ID,
             });
     },
   },
@@ -529,7 +529,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_B_ID,
+              gameId: DART_GAME_A_ID,
             });
     },
   },
@@ -540,7 +540,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_B_ID,
+              gameId: DART_GAME_A_ID,
             });
     },
   },
@@ -551,7 +551,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_B_ID,
+              gameId: DART_GAME_A_ID,
             });
     },
   },
@@ -562,7 +562,7 @@ const BAR_SCENE_OBJECTS = [
     scaling: new Vector3(0.19, 0.19, 0.19),
     afterPlace: (result) => {
       configureThrowableDart(result, {
-              gameId: DART_GAME_B_ID,
+              gameId: DART_GAME_A_ID,
             });
     },
   },
