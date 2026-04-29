@@ -2208,6 +2208,64 @@ async function flushPendingIceCandidates(id, pc) {
     }
   }
 }
+
+function addLocalTracksToPeerConnection(pc, targetId) {
+  if (!pc || !localStream) return false;
+
+  const tracks = localStream.getTracks();
+  let addedAny = false;
+
+  for (const track of tracks) {
+    const alreadySending = pc.getSenders().some((sender) => sender.track === track);
+    if (alreadySending) continue;
+
+    console.log("[VOICE] Adding late local track:", {
+      targetId,
+      kind: track.kind,
+      enabled: track.enabled,
+      muted: track.muted,
+      readyState: track.readyState,
+      label: track.label,
+    });
+    pc.addTrack(track, localStream);
+    addedAny = true;
+  }
+
+  return addedAny;
+}
+
+async function renegotiatePeerConnection(targetId, pc, reason = "renegotiate") {
+  if (!pc || pc.signalingState !== "stable") {
+    console.warn("[VOICE] Skipping renegotiation; signaling state is", targetId, pc?.signalingState);
+    return false;
+  }
+
+  try {
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit("webrtc-offer", {
+      targetId,
+      offer: pc.localDescription,
+    });
+    console.log(`[VOICE] Sent ${reason} offer to:`, targetId);
+    return true;
+  } catch (error) {
+    console.error("[VOICE] Failed renegotiation:", targetId, error);
+    return false;
+  }
+}
+
+async function syncLocalTracksToExistingPeerConnections() {
+  if (!localStream) return;
+
+  for (const [targetId, pc] of peerConnections.entries()) {
+    const addedAny = addLocalTracksToPeerConnection(pc, targetId);
+    if (!addedAny) continue;
+
+    await renegotiatePeerConnection(targetId, pc, "late-track");
+  }
+}
+
 function extractYaw(camera) {
   if (camera.rotationQuaternion) {
     const q = camera.rotationQuaternion;
@@ -2241,17 +2299,7 @@ function createPeerConnection(targetId) {
   if (localStream) {
     const tracks = localStream.getTracks();
     console.log(`[VOICE] Adding ${tracks.length} local tracks to PC for ${targetId}`);
-
-    tracks.forEach((track) => {
-      console.log("[VOICE] Adding track:", {
-        kind: track.kind,
-        enabled: track.enabled,
-        muted: track.muted,
-        readyState: track.readyState,
-        label: track.label
-      });
-      pc.addTrack(track, localStream);
-    });
+    addLocalTracksToPeerConnection(pc, targetId);
   } else {
     console.warn("[VOICE] No localStream when creating PC for", targetId);
   }
@@ -2577,6 +2625,7 @@ export async function launchApp(options = {}) {
 
     applyMicMode();
     localVoiceAnalyser = createVoiceAnalyser(localStream);
+    await syncLocalTracksToExistingPeerConnections();
   } catch (err) {
     console.error("[VOICE] Microphone error:", err);
   }
