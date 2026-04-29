@@ -150,26 +150,65 @@ const webRtcConfig = Object.freeze({
   iceServers: buildWebRTCIceServers(),
 });
 
-const players = new Map();
-const chatMessages = [];
-const MAX_CHAT_MESSAGES = 40;
-const SCENE_STATE_SCOPES = new Set(["object", "dart", "dartGame", "tv", "picture"]);
-const sceneState = {
-  object: {},
-  dart: {},
-  dartGame: {},
-  tv: {},
-  picture: {},
-};
-
 const SCENE_CAPACITY = {
   start: 10,
   bar: 10,
   parking: 10,
 };
 
-const tvDebugPlaybackByKey = new Map();
+const players = new Map();
+const MAX_CHAT_MESSAGES = 40;
+const EMPTY_ROOM_RESET_MS = 30_000;
+const SCENE_STATE_SCOPES = new Set(["object", "dart", "dartGame", "tv", "picture"]);
 const supportedKaraokeExtensions = new Set([".mp4", ".webm", ".mov", ".m4v"]);
+const roomStateById = new Map();
+const roomResetTimers = new Map();
+
+function createEmptyRoomState() {
+  return {
+    chatMessages: [],
+    sceneState: {
+      object: {},
+      dart: {},
+      dartGame: {},
+      tv: {},
+      picture: {},
+    },
+    tvDebugPlaybackByKey: new Map(),
+  };
+}
+
+function getRoomState(roomId) {
+  if (!roomId || !SCENE_CAPACITY[roomId]) {
+    return createEmptyRoomState();
+  }
+
+  let roomState = roomStateById.get(roomId);
+  if (!roomState) {
+    roomState = createEmptyRoomState();
+    roomStateById.set(roomId, roomState);
+  }
+
+  return roomState;
+}
+
+function getRoomPlayerCount(roomId) {
+  let count = 0;
+  for (const player of players.values()) {
+    if (player.room === roomId) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function cancelRoomReset(roomId) {
+  const timer = roomResetTimers.get(roomId);
+  if (timer) {
+    clearTimeout(timer);
+    roomResetTimers.delete(roomId);
+  }
+}
 
 app.get("/healthz", (_req, res) => {
   res.json({
@@ -267,7 +306,9 @@ function sanitizeSceneStateUpdate(payload) {
 }
 
 function applySceneStateUpdate({ scope, key, state }, actorId = null) {
-  const current = sceneState[scope][key] || {};
+  const player = actorId ? players.get(actorId) : null;
+  const roomState = getRoomState(player?.room);
+  const current = roomState.sceneState[scope][key] || {};
   const next = {
     ...current,
     ...state,
@@ -278,39 +319,56 @@ function applySceneStateUpdate({ scope, key, state }, actorId = null) {
     next.lastActorId = actorId;
   }
 
-  sceneState[scope][key] = next;
+  roomState.sceneState[scope][key] = next;
   return next;
 }
 
-function clearDisconnectedOwnership(disconnectedId) {
+function clearDisconnectedOwnership(disconnectedId, roomId) {
+  if (!roomId || !SCENE_CAPACITY[roomId]) return;
+
+  const roomState = getRoomState(roomId);
   for (const scope of ["object", "dart"]) {
-    for (const [key, state] of Object.entries(sceneState[scope])) {
+    for (const [key, state] of Object.entries(roomState.sceneState[scope])) {
       if (state?.ownerId !== disconnectedId) continue;
 
-      sceneState[scope][key] = {
+      roomState.sceneState[scope][key] = {
         ...state,
         ownerId: null,
         isHeld: false,
         updatedAt: Date.now(),
       };
 
-      io.to(players.get(disconnectedId)?.room).emit("scene-state-update", {
+      io.to(roomId).emit("scene-state-update", {
         scope,
         key,
-        state: sceneState[scope][key],
+        state: roomState.sceneState[scope][key],
       });
     }
   }
 }
 
-function resetSharedRoomState() {
-  chatMessages.length = 0;
-  sceneState.object = {};
-  sceneState.dart = {};
-  sceneState.dartGame = {};
-  sceneState.tv = {};
-  sceneState.picture = {};
-  tvDebugPlaybackByKey.clear();
+function resetRoomState(roomId) {
+  if (!roomId || !SCENE_CAPACITY[roomId]) return;
+
+  roomStateById.set(roomId, createEmptyRoomState());
+  console.log(`[ROOM] Reset state for ${roomId} after ${EMPTY_ROOM_RESET_MS}ms empty`);
+}
+
+function scheduleRoomResetIfEmpty(roomId) {
+  if (!roomId || !SCENE_CAPACITY[roomId]) return;
+  if (getRoomPlayerCount(roomId) > 0) return;
+  if (roomResetTimers.has(roomId)) return;
+
+  const timeoutId = setTimeout(() => {
+    roomResetTimers.delete(roomId);
+    if (getRoomPlayerCount(roomId) > 0) {
+      return;
+    }
+
+    resetRoomState(roomId);
+  }, EMPTY_ROOM_RESET_MS);
+
+  roomResetTimers.set(roomId, timeoutId);
 }
 
 function getSceneCounts() {
@@ -349,7 +407,12 @@ function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
   if (update?.scope !== "tv" || !update.key || !nextState) return;
 
   const isPlaying = !!nextState.currentTrack?.url && nextState.paused === false;
-  const previousSignature = tvDebugPlaybackByKey.get(update.key) || null;
+  const player = players.get(socketId);
+  const roomId = player?.room;
+  if (!roomId || !SCENE_CAPACITY[roomId]) return;
+
+  const roomState = getRoomState(roomId);
+  const previousSignature = roomState.tvDebugPlaybackByKey.get(update.key) || null;
   const nextSignature = isPlaying
     ? `${nextState.currentTrack.url}|${nextState.paused === false ? "playing" : "paused"}`
     : null;
@@ -357,17 +420,14 @@ function maybeBroadcastTVDebugMessage(socketId, update, nextState) {
   if (previousSignature === nextSignature) return;
 
   if (nextSignature) {
-    tvDebugPlaybackByKey.set(update.key, nextSignature);
+    roomState.tvDebugPlaybackByKey.set(update.key, nextSignature);
   } else {
-    tvDebugPlaybackByKey.delete(update.key);
+    roomState.tvDebugPlaybackByKey.delete(update.key);
   }
 
   if (!isPlaying) return;
 
-  const player = players.get(socketId);
-  if (!player?.room) return;
-
-  io.to(player.room).emit("tv-debug-message", {
+  io.to(roomId).emit("tv-debug-message", {
     tvKey: update.key,
     senderId: socketId,
     senderName: player?.name || "Player",
@@ -418,7 +478,7 @@ io.on("connection", (socket) => {
 
       const max = SCENE_CAPACITY[sceneId] || 9999;
 
-      const currentCount = [...players.values()].filter(p => p.room === sceneId).length;
+      const currentCount = getRoomPlayerCount(sceneId);
 
       if (currentCount >= max) {
         socket.emit("sceneFull", { sceneId, max });
@@ -431,6 +491,10 @@ io.on("connection", (socket) => {
       socket.join(sceneId);
       socket.currentRoom = sceneId;
       player.room = sceneId;
+      cancelRoomReset(sceneId);
+      scheduleRoomResetIfEmpty(prevRoom);
+
+      const roomState = getRoomState(sceneId);
 
       const roomPlayers = Object.fromEntries(
         [...players.entries()].filter(([_, p]) => p.room === sceneId)
@@ -439,8 +503,8 @@ io.on("connection", (socket) => {
       socket.emit("init", {
         selfId: socket.id,
         players: roomPlayers,
-        chatMessages,
-        sceneState,
+        chatMessages: roomState.chatMessages,
+        sceneState: roomState.sceneState,
       });
 
       socket.to(sceneId).emit("playerJoined", player);
@@ -550,6 +614,9 @@ io.on("connection", (socket) => {
     const player = players.get(socket.id);
     const cleanText = sanitizeChatText(text);
     if (!player || !cleanText) return;
+    if (!SCENE_CAPACITY[player.room]) return;
+
+    const roomState = getRoomState(player.room);
 
     const message = {
       id: `${Date.now()}-${socket.id}`,
@@ -559,24 +626,24 @@ io.on("connection", (socket) => {
       createdAt: Date.now(),
     };
 
-    chatMessages.push(message);
-    while (chatMessages.length > MAX_CHAT_MESSAGES) {
-      chatMessages.shift();
+    roomState.chatMessages.push(message);
+    while (roomState.chatMessages.length > MAX_CHAT_MESSAGES) {
+      roomState.chatMessages.shift();
     }
 
     io.to(player.room).emit("chat-message", message);
   });
 
   socket.on("scene-state-update", (payload, ack) => {
+    const player = players.get(socket.id);
     const update = sanitizeSceneStateUpdate(payload);
-    if (!update) {
+    if (!player || !update || !SCENE_CAPACITY[player.room]) {
       ack?.({ ok: false, reason: "invalid-update" });
       return;
     }
 
     const nextState = applySceneStateUpdate(update, socket.id);
     maybeBroadcastTVDebugMessage(socket.id, update, nextState);
-    const player = players.get(socket.id);
     io.to(player.room).emit("scene-state-update", {
       scope: update.scope,
       key: update.key,
@@ -638,12 +705,11 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log("User disconnected:", socket.id);
+    const player = players.get(socket.id);
+    const room = player?.room || socket.currentRoom;
+    clearDisconnectedOwnership(socket.id, room);
     players.delete(socket.id);
-    clearDisconnectedOwnership(socket.id);
-    if (players.size === 0) {
-      resetSharedRoomState();
-    }
-    const room = socket.currentRoom;
+    scheduleRoomResetIfEmpty(room);
     if (room) {
      io.to(room).emit("playerLeft", socket.id);
 
