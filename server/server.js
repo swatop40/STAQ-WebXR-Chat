@@ -16,14 +16,35 @@ const repoRoot = path.resolve(__dirname, "..");
 const distDir = path.join(repoRoot, "dist");
 const karaokeSongsDir = path.join(repoRoot, "public", "karaoke-songs");
 const isProduction = process.env.NODE_ENV === "production";
-const allowedOrigin = process.env.CORS_ORIGIN || "*";
+const allowedOrigins = (() => {
+  const rawValue = process.env.CORS_ORIGIN?.trim();
+  if (!rawValue || rawValue === "*") {
+    return "*";
+  }
 
-app.use(cors({ origin: allowedOrigin }));
+  const origins = rawValue
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  return origins.length > 0 ? origins : "*";
+})();
+
+function validateCorsOrigin(origin, callback) {
+  if (!origin || allowedOrigins === "*") {
+    callback(null, true);
+    return;
+  }
+
+  callback(null, allowedOrigins.includes(origin));
+}
+
+app.use(cors({ origin: validateCorsOrigin }));
 
 const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
-  cors: { origin: allowedOrigin },
+  cors: { origin: validateCorsOrigin },
 });
 
 const players = new Map();
