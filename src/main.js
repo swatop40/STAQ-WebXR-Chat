@@ -198,7 +198,31 @@ function isMobileBrowser() {
 }
 
 function shouldShowDebugLayer() {
-  return !isMobileBrowser();
+  return false;
+}
+
+function setupDebugLayerToggle(scene) {
+  if (!scene || typeof window === "undefined" || isMobileBrowser()) return;
+  if (window.__staqDebugLayerToggleAttached) return;
+
+  window.__staqDebugLayerToggleAttached = true;
+
+  window.addEventListener("keydown", async (event) => {
+    if (event.repeat) return;
+    if (event.key !== "F10") return;
+
+    event.preventDefault();
+
+    try {
+      if (scene.debugLayer.isVisible()) {
+        await scene.debugLayer.hide();
+      } else {
+        await scene.debugLayer.show();
+      }
+    } catch (error) {
+      console.warn("[DEBUG] Failed to toggle debug layer", error);
+    }
+  });
 }
 
 function showRuntimeError(message, error = null) {
@@ -385,8 +409,10 @@ const MAX_CHAT_MESSAGES = 40;
 const VOICE_RADIUS = 12;
 let vrAvatarHeightOverride = null;
 const peerConnections = new Map();
+const pendingIceCandidates = new Map();
 const remoteAudioEls = new Map();
 const remoteVoiceAnalysers = new Map();
+const remoteAudioSessionIds = new Map();
 const remotePlayerNames = new Map();
 const mutedRemoteIds = new Set();
 let localVoiceAnalyser = null;
@@ -473,6 +499,8 @@ function logConnectedPlayers(context, playersLike = null) {
 }
 
 function cleanupRemoteAudio(playerId) {
+  remoteAudioSessionIds.set(playerId, (remoteAudioSessionIds.get(playerId) || 0) + 1);
+
   const voiceAnalyser = remoteVoiceAnalysers.get(playerId);
   if (voiceAnalyser) {
     try {
@@ -631,6 +659,7 @@ function updateAllRemoteAudioVolumes() {
 
 async function createRemoteAudio(playerId, stream) {
   cleanupRemoteAudio(playerId);
+  const sessionId = remoteAudioSessionIds.get(playerId) || 0;
 
   const audioEl = document.createElement("audio");
   audioEl.autoplay = true;
@@ -648,6 +677,9 @@ async function createRemoteAudio(playerId, stream) {
     await audioEl.play();
   } catch (err) {
     console.warn("[VOICE] remote audio play failed:", playerId, err);
+    if (remoteAudioSessionIds.get(playerId) !== sessionId) {
+      return null;
+    }
   }
 
   return audioEl;
@@ -2158,7 +2190,23 @@ function removePeerConnection(id) {
     peerConnections.delete(id);
   }
 
+  pendingIceCandidates.delete(id);
   cleanupRemoteAudio(id);
+}
+
+async function flushPendingIceCandidates(id, pc) {
+  const queued = pendingIceCandidates.get(id);
+  if (!queued?.length) return;
+
+  pendingIceCandidates.delete(id);
+
+  for (const candidate of queued) {
+    try {
+      await pc.addIceCandidate(new RTCIceCandidate(candidate));
+    } catch (error) {
+      console.warn("[VOICE] Failed applying queued ICE candidate:", id, error);
+    }
+  }
 }
 function extractYaw(camera) {
   if (camera.rotationQuaternion) {
@@ -2396,6 +2444,7 @@ socket.on("webrtc-offer", async ({ fromId, offer }) => {
     }
 
     await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    await flushPendingIceCandidates(fromId, pc);
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -2422,6 +2471,7 @@ socket.on("webrtc-answer", async ({ fromId, answer }) => {
     }
 
     await pc.setRemoteDescription(new RTCSessionDescription(answer));
+    await flushPendingIceCandidates(fromId, pc);
   } catch (err) {
     console.error("[VOICE] Error handling answer:", err);
   }
@@ -2431,6 +2481,13 @@ socket.on("webrtc-ice-candidate", async ({ fromId, candidate }) => {
   try {
     const pc = peerConnections.get(fromId);
     if (!pc || !candidate) return;
+
+    if (!pc.remoteDescription) {
+      const queued = pendingIceCandidates.get(fromId) || [];
+      queued.push(candidate);
+      pendingIceCandidates.set(fromId, queued);
+      return;
+    }
 
     await pc.addIceCandidate(new RTCIceCandidate(candidate));
   } catch (err) {
@@ -2550,6 +2607,7 @@ export async function launchApp(options = {}) {
   if (shouldShowDebugLayer()) {
     scene.debugLayer.show();
   }
+  setupDebugLayerToggle(scene);
 
   const SEND_HZ = 15;
   let lastSend = 0;
