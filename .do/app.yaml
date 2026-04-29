@@ -32,6 +32,10 @@ services:
         scope: RUN_TIME
         type: GENERAL
         value: https://st-aq.com
+      - key: STUN_URLS
+        scope: RUN_TIME
+        type: GENERAL
+        value: stun:stun.l.google.com:19302
 ingress:
   rules:
     - component:

@@ -20,6 +20,12 @@ const socket = io({
   autoConnect: false,
 });
 
+const DEFAULT_WEBRTC_ICE_SERVERS = Object.freeze([
+  { urls: "stun:stun.l.google.com:19302" },
+]);
+
+let rtcIceServers = [...DEFAULT_WEBRTC_ICE_SERVERS];
+
 socket.on("connect", () => {
   selfId = socket.id;
   console.log("[NET] Connected:", socket.id);
@@ -113,6 +119,32 @@ function waitForSocketConnect() {
     socket.on("connect_error", onConnectError);
     socket.connect();
   });
+}
+
+async function loadWebRTCConfig() {
+  try {
+    const response = await fetch("/api/webrtc-config", {
+      headers: { Accept: "application/json" },
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`);
+    }
+
+    const payload = await response.json();
+    const nextIceServers = Array.isArray(payload?.iceServers)
+      ? payload.iceServers.filter((entry) => entry && entry.urls)
+      : [];
+
+    rtcIceServers = nextIceServers.length > 0
+      ? nextIceServers
+      : [...DEFAULT_WEBRTC_ICE_SERVERS];
+
+    console.log("[VOICE] Loaded ICE server config", rtcIceServers);
+  } catch (error) {
+    rtcIceServers = [...DEFAULT_WEBRTC_ICE_SERVERS];
+    console.warn("[VOICE] Falling back to default ICE server config", error);
+  }
 }
 
 function requestSceneJoin(sceneId) {
@@ -2155,7 +2187,7 @@ function createPeerConnection(targetId) {
   cleanupRemoteAudio(targetId);
 
   const pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    iceServers: rtcIceServers
   });
 
   if (localStream) {
@@ -2446,6 +2478,7 @@ export async function launchApp(options = {}) {
   const sceneId = typeof options.sceneId === "string" ? options.sceneId.trim() : "";
 
   try {
+    await loadWebRTCConfig();
     await waitForSocketConnect();
     if (sceneId) {
       await requestSceneJoin(sceneId);

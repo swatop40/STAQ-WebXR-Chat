@@ -47,6 +47,109 @@ const io = new Server(httpServer, {
   cors: { origin: validateCorsOrigin },
 });
 
+const DEFAULT_WEBRTC_ICE_SERVERS = Object.freeze([
+  { urls: "stun:stun.l.google.com:19302" },
+]);
+
+function parseIceServerUrls(value) {
+  if (typeof value !== "string") return [];
+
+  return value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function sanitizeIceServer(entry) {
+  if (!entry || typeof entry !== "object") return null;
+
+  const urls = Array.isArray(entry.urls)
+    ? entry.urls.map((value) => String(value).trim()).filter(Boolean)
+    : typeof entry.urls === "string"
+      ? entry.urls.trim()
+      : "";
+
+  if ((Array.isArray(urls) && urls.length === 0) || (!Array.isArray(urls) && !urls)) {
+    return null;
+  }
+
+  const next = { urls };
+
+  if (typeof entry.username === "string" && entry.username.trim()) {
+    next.username = entry.username.trim();
+  }
+
+  if (typeof entry.credential === "string" && entry.credential.trim()) {
+    next.credential = entry.credential.trim();
+  }
+
+  if (typeof entry.credentialType === "string" && entry.credentialType.trim()) {
+    next.credentialType = entry.credentialType.trim();
+  }
+
+  return next;
+}
+
+function parseIceServersFromJson(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!Array.isArray(parsed)) return null;
+
+    const servers = parsed
+      .map((entry) => sanitizeIceServer(entry))
+      .filter(Boolean);
+
+    return servers.length > 0 ? servers : null;
+  } catch (error) {
+    console.warn("[VOICE] Failed to parse WEBRTC_ICE_SERVERS JSON", error);
+    return null;
+  }
+}
+
+function buildWebRTCIceServers() {
+  const fromJson = parseIceServersFromJson(process.env.WEBRTC_ICE_SERVERS);
+  if (fromJson) {
+    return fromJson;
+  }
+
+  const servers = [];
+  const stunUrls = parseIceServerUrls(process.env.STUN_URLS);
+  if (stunUrls.length > 0) {
+    servers.push({
+      urls: stunUrls.length === 1 ? stunUrls[0] : stunUrls,
+    });
+  }
+
+  const turnUrls = parseIceServerUrls(process.env.TURN_URLS);
+  if (turnUrls.length > 0) {
+    const turnServer = {
+      urls: turnUrls.length === 1 ? turnUrls[0] : turnUrls,
+    };
+
+    if (process.env.TURN_USERNAME?.trim()) {
+      turnServer.username = process.env.TURN_USERNAME.trim();
+    }
+
+    if (process.env.TURN_CREDENTIAL?.trim()) {
+      turnServer.credential = process.env.TURN_CREDENTIAL.trim();
+    }
+
+    if (process.env.TURN_CREDENTIAL_TYPE?.trim()) {
+      turnServer.credentialType = process.env.TURN_CREDENTIAL_TYPE.trim();
+    }
+
+    servers.push(turnServer);
+  }
+
+  return servers.length > 0 ? servers : [...DEFAULT_WEBRTC_ICE_SERVERS];
+}
+
+const webRtcConfig = Object.freeze({
+  iceServers: buildWebRTCIceServers(),
+});
+
 const players = new Map();
 const chatMessages = [];
 const MAX_CHAT_MESSAGES = 40;
@@ -74,6 +177,10 @@ app.get("/healthz", (_req, res) => {
     players: players.size,
     uptimeSeconds: Math.round(process.uptime()),
   });
+});
+
+app.get("/api/webrtc-config", (_req, res) => {
+  res.json(webRtcConfig);
 });
 
 function makeTrackTitle(fileName) {
