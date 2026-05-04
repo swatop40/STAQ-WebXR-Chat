@@ -2306,6 +2306,66 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   keyboardGrid.addRowDefinition(0.34);
   keyboardCard.addControl(keyboardGrid);
 
+  const debugBoard = MeshBuilder.CreatePlane(
+    "menuDebugBoard",
+    { width: 1.98, height: 1.02, sideOrientation: Mesh.DOUBLESIDE },
+    scene
+  );
+  debugBoard.parent = menuHost;
+  debugBoard.position.set(0, 0.66, 0.02);
+  debugBoard.isPickable = true;
+  debugBoard.metadata = {
+    ...(debugBoard.metadata || {}),
+    suppressSceneInteraction: true,
+  };
+  debugBoard.setEnabled(false);
+
+  const debugTexture = GUI.AdvancedDynamicTexture.CreateForMesh(
+    debugBoard,
+    3328,
+    1664,
+    false
+  );
+
+  const debugCard = new GUI.Rectangle("menuDebugCard");
+  debugCard.width = "99.2%";
+  debugCard.height = "94%";
+  debugCard.thickness = 3;
+  debugCard.cornerRadius = 28;
+  debugCard.color = "#bfd0df";
+  debugCard.background = "#0d1a29F2";
+  debugTexture.addControl(debugCard);
+
+  const debugLayout = new GUI.Grid("debugLayoutGrid");
+  debugLayout.width = "96%";
+  debugLayout.height = "90%";
+  debugLayout.addRowDefinition(0.78);
+  debugLayout.addRowDefinition(0.22);
+  debugCard.addControl(debugLayout);
+
+  const debugMetricsText = new GUI.TextBlock("debugMetricsText");
+  debugMetricsText.text = "DEBUG\nLoading...";
+  debugMetricsText.color = "#e2e8f0";
+  debugMetricsText.fontFamily = "Consolas";
+  debugMetricsText.fontSize = 74;
+  debugMetricsText.textWrapping = true;
+  debugMetricsText.lineSpacing = "10px";
+  debugMetricsText.textHorizontalAlignment = GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+  debugMetricsText.textVerticalAlignment = GUI.Control.VERTICAL_ALIGNMENT_TOP;
+  debugMetricsText.paddingLeft = "24px";
+  debugMetricsText.paddingRight = "24px";
+  debugMetricsText.paddingTop = "16px";
+  debugMetricsText.paddingBottom = "8px";
+  debugLayout.addControl(debugMetricsText, 0, 0);
+
+  const debugActionGrid = new GUI.Grid("debugActionGrid");
+  debugActionGrid.width = "98%";
+  debugActionGrid.height = "90%";
+  for (let i = 0; i < 4; i += 1) {
+    debugActionGrid.addColumnDefinition(0.25);
+  }
+  debugLayout.addControl(debugActionGrid, 1, 0);
+
   let menuButtonIndex = 0;
   let settingsButtonIndex = 0;
   let desktopButtonIndex = 0;
@@ -2313,6 +2373,9 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   let volumeButtonIndex = 0;
   let muteButtonIndex = 0;
   let pendingLeaveAction = null;
+  let debugPanelVisible = false;
+  let debugOverlayUnsubscribe = null;
+  let debugCopyButton = null;
   const menuButtonFontSize = 76;
   const listButtonFontSize = 76;
 
@@ -2397,6 +2460,76 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
     muteButtonIndex = Math.max(muteButtonIndex, targetIndex + 1);
     return button;
   }
+
+  function refreshDebugPanel() {
+    debugMetricsText.text = scene.debugOverlayControls?.getText?.() || "DEBUG\nUnavailable";
+  }
+
+  function setDebugPanelVisible(visible) {
+    const nextVisible = !!visible;
+    if (debugPanelVisible === nextVisible) {
+      if (nextVisible) {
+        refreshDebugPanel();
+      }
+      return debugPanelVisible;
+    }
+
+    debugPanelVisible = nextVisible;
+    debugBoard.setEnabled(debugPanelVisible);
+
+    if (debugPanelVisible) {
+      refreshDebugPanel();
+      scene.debugOverlayControls?.show?.();
+      debugOverlayUnsubscribe?.();
+      debugOverlayUnsubscribe = scene.debugOverlayControls?.subscribe?.((text) => {
+        debugMetricsText.text = text || "DEBUG\nUnavailable";
+      }) || null;
+    } else {
+      debugOverlayUnsubscribe?.();
+      debugOverlayUnsubscribe = null;
+      scene.debugOverlayControls?.hide?.();
+      if (debugCopyButton) {
+        debugCopyButton.textBlock.text = "Copy";
+      }
+    }
+
+    return debugPanelVisible;
+  }
+
+  function addDebugActionButton(text, callback, column, background = "#4e6f8d") {
+    const button = GUI.Button.CreateSimpleButton(controlName(text, "debug_btn"), text);
+    styleMenuButton(button, 74, background);
+    button.width = "92%";
+    button.height = "82%";
+    button.onPointerUpObservable.add(callback);
+    debugActionGrid.addControl(button, 0, column);
+    return button;
+  }
+
+  addDebugActionButton("Reset Pos", () => {
+    scene.debugOverlayControls?.resetPosition?.();
+    refreshDebugPanel();
+  }, 0, "#2f7d5f");
+
+  addDebugActionButton("Voice", async () => {
+    await scene.debugOverlayControls?.reconnectVoice?.();
+    refreshDebugPanel();
+  }, 1, "#4e6f8d");
+
+  addDebugActionButton("Socket", async () => {
+    await scene.debugOverlayControls?.reconnectSocket?.();
+    refreshDebugPanel();
+  }, 2, "#4e6f8d");
+
+  debugCopyButton = addDebugActionButton("Copy", async () => {
+    const didCopy = await scene.debugOverlayControls?.copyToClipboard?.();
+    debugCopyButton.textBlock.text = didCopy ? "Copied" : "Copy Fail";
+    window.setTimeout(() => {
+      if (debugCopyButton) {
+        debugCopyButton.textBlock.text = "Copy";
+      }
+    }, 1200);
+  }, 3, "#5b6b7c");
 
   function setChatKeyboardVisible(visible) {
     keyboardBoard.setEnabled(!!visible && isInXR(scene));
@@ -2596,6 +2729,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
 
   function showLeaveConfirm(action) {
     pendingLeaveAction = action;
+    setDebugPanelVisible(false);
     menuPanel.isVisible = false;
     settingsPanel.isVisible = false;
     desktopControlsPanel.isVisible = false;
@@ -2680,6 +2814,7 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
 
   function hideMenu() {
     showMainMenuPanel();
+    setDebugPanelVisible(false);
     menuBoard.setEnabled(false);
     menuVisible = false;
     menuAnchorRoot = null;
@@ -2850,7 +2985,9 @@ function setupMenu(scene, xr, applyXRMovementMode, settings) {
   addMenuButton("Open Server Chat", () => {
     showChatPanel();
   });
-  addMenuButton("Emotes", () => console.log("Open emotes clicked"));
+  addMenuButton("Emotes", () => {
+    setDebugPanelVisible(!debugPanelVisible);
+  });
   addMenuButton("Settings", () => {
     updateSettingsLabels();
     showSettingsPanel();
@@ -3277,6 +3414,19 @@ export async function setupSharedWebXR(scene, options) {
       console.log(`[NAV] XR turn mode: ${xrTurnMode}`);
       return xrTurnMode;
     },
+  };
+  scene.playerSpawn = playerSpawn.clone();
+  scene.navigation.resetPlayerToSpawn = () => {
+    const spawn = scene.playerSpawn?.clone?.() || playerSpawn.clone();
+    scene.playerMesh?.position?.copyFrom?.(spawn);
+
+    const xrCamera = scene.xrHelper?.baseExperience?.camera;
+    if (xrCamera) {
+      xrCamera.position.set(xrSpawnFloor.x, xrCamera.position.y, xrSpawnFloor.z);
+    }
+
+    scene.xrOrigin?.position?.copyFrom?.(xrSpawnFloor);
+    return true;
   };
 
   const xrOrigin = new TransformNode("xrOrigin", scene);

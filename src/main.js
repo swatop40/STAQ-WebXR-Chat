@@ -40,6 +40,7 @@ const engine = new BABYLON.Engine(canvas, true);
 
 let sceneRef = null;
 let selfId = null;
+let currentSceneId = null;
 
 const remoteMeshes = new Map();
 const pendingRemoteMeshes = new Map();
@@ -150,6 +151,7 @@ async function loadWebRTCConfig() {
 function requestSceneJoin(sceneId) {
   const cleanSceneId = typeof sceneId === "string" ? sceneId.trim() : "";
   if (!cleanSceneId) return Promise.resolve();
+  currentSceneId = cleanSceneId;
 
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -223,6 +225,419 @@ function setupDebugLayerToggle(scene) {
       console.warn("[DEBUG] Failed to toggle debug layer", error);
     }
   });
+}
+
+function formatDebugMetric(value, suffix = "") {
+  if (value == null || value === "" || Number.isNaN(value)) return "N/A";
+  return `${value}${suffix}`;
+}
+
+function roundDebugNumber(value, digits = 1) {
+  if (!Number.isFinite(value)) return null;
+  return Number(value.toFixed(digits));
+}
+
+function getDebugDrawCallCount(scene) {
+  const engineRef = scene?.getEngine?.();
+  const candidates = [
+    engineRef?.drawCalls?._current,
+    engineRef?.drawCalls?.current,
+    engineRef?._drawCalls?.current,
+    scene?._activeIndices?._currentDrawCalls,
+  ];
+
+  for (const value of candidates) {
+    if (Number.isFinite(value)) return value;
+  }
+
+  return null;
+}
+
+function getClientDeviceLabel() {
+  const userAgent = navigator.userAgent || "";
+
+  if (/Quest/i.test(userAgent)) return "Quest";
+  if (/Vision/i.test(userAgent)) return "Vision";
+  if (/iPhone/i.test(userAgent)) return "iPhone";
+  if (/iPad/i.test(userAgent)) return "iPad";
+  if (/Android/i.test(userAgent)) return "Android";
+  if (/Windows/i.test(userAgent)) return "Windows";
+  if (/Macintosh|Mac OS X/i.test(userAgent)) return "Mac";
+  if (/Linux/i.test(userAgent)) return "Linux";
+  if (/Chrome/i.test(userAgent)) return "Chrome";
+  if (/Safari/i.test(userAgent)) return "Safari";
+  if (/Firefox/i.test(userAgent)) return "Firefox";
+
+  return "N/A";
+}
+
+function getCurrentModeLabel(scene) {
+  const xrState = scene?.xrHelper?.baseExperience?.state;
+  return xrState === BABYLON.WebXRState.IN_XR ? "VR" : "Desktop";
+}
+
+function getCurrentRoomLabel(scene) {
+  const roomId = currentSceneId
+    || scene?.metadata?.roomName
+    || scene?.metadata?.sceneId
+    || "";
+
+  const roomLabels = {
+    start: "Start",
+    bar: "Bar",
+    parking: "Parking",
+  };
+
+  return roomLabels[roomId] || roomId || "N/A";
+}
+
+function getLocalPositionForDebug(scene) {
+  const cam = scene?.activeCamera;
+  if (!cam) return null;
+
+  const xrActive = scene?.xrHelper?.baseExperience?.state === BABYLON.WebXRState.IN_XR;
+  const pos = xrActive
+    ? cam.globalPosition
+    : (scene?.playerMesh?.position || cam.position);
+
+  if (!pos) return null;
+
+  return {
+    x: roundDebugNumber(pos.x, 1),
+    y: roundDebugNumber(pos.y, 1),
+    z: roundDebugNumber(pos.z, 1),
+  };
+}
+
+function getRemoteUpdateAgeMs() {
+  if (!remotePoseUpdateTimes.size) return null;
+
+  const now = performance.now();
+  let maxAge = 0;
+
+  for (const updatedAt of remotePoseUpdateTimes.values()) {
+    if (!Number.isFinite(updatedAt)) continue;
+    maxAge = Math.max(maxAge, now - updatedAt);
+  }
+
+  return roundDebugNumber(maxAge, 0);
+}
+
+function getVoiceStatusLabel() {
+  const track = localStream?.getAudioTracks?.()[0];
+  if (track && track.readyState === "live") return "On";
+  if (peerConnections.size > 0) return "Peers";
+  return "Off";
+}
+
+function getMicStatusLabel() {
+  const track = localStream?.getAudioTracks?.()[0];
+  if (micMode === "muted") return "Muted";
+  if (micMode === "pushToTalk") {
+    return pushToTalkPressed && track?.enabled ? "PTT" : "PTT Idle";
+  }
+  if (track?.enabled && track.readyState === "live") return "On";
+  if (track?.readyState) return track.readyState;
+  return "Off";
+}
+
+function registerRemotePoseUpdate(playerId) {
+  if (!playerId) return;
+  remotePoseUpdateTimes.set(playerId, performance.now());
+}
+
+function stopMediaStreamTracks(stream) {
+  const tracks = stream?.getTracks?.() || [];
+  for (const track of tracks) {
+    try {
+      track.stop();
+    } catch (error) {
+      console.warn("[VOICE] Failed stopping track", error);
+    }
+  }
+}
+
+function disposeVoiceAnalyser(voiceState, label = "voice analyser") {
+  if (!voiceState) return;
+
+  try {
+    voiceState.source?.disconnect?.();
+    voiceState.analyser?.disconnect?.();
+  } catch (error) {
+    console.warn(`[VOICE] Failed disposing ${label}`, error);
+  }
+}
+
+async function syncLocalTracksToExistingPeerConnections(reason = "late-track") {
+  if (!localStream) return;
+
+  const tracks = localStream.getTracks();
+
+  for (const [targetId, pc] of peerConnections.entries()) {
+    let needsRenegotiation = false;
+
+    for (const track of tracks) {
+      const sender = pc.getSenders().find((entry) => entry.track?.kind === track.kind);
+      if (sender) {
+        if (sender.track !== track) {
+          try {
+            await sender.replaceTrack(track);
+          } catch (error) {
+            console.warn("[VOICE] Failed replacing local track:", targetId, error);
+          }
+        }
+        continue;
+      }
+
+      pc.addTrack(track, localStream);
+      needsRenegotiation = true;
+    }
+
+    if (needsRenegotiation) {
+      await renegotiatePeerConnection(targetId, pc, reason);
+    }
+  }
+}
+
+async function refreshLocalVoiceStream() {
+  const previousStream = localStream;
+  const previousAnalyser = localVoiceAnalyser;
+
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+
+    applyMicMode();
+    localVoiceAnalyser = createVoiceAnalyser(localStream);
+    await syncLocalTracksToExistingPeerConnections("voice-refresh");
+
+    stopMediaStreamTracks(previousStream);
+    disposeVoiceAnalyser(previousAnalyser, "local analyser");
+    return true;
+  } catch (error) {
+    localStream = previousStream;
+    localVoiceAnalyser = previousAnalyser;
+    console.warn("[VOICE] Microphone refresh unavailable", error);
+    return false;
+  }
+}
+
+async function reconnectSocketToCurrentRoom() {
+  try {
+    if (socket.connected) {
+      socket.disconnect();
+    }
+
+    await waitForSocketConnect();
+    if (currentSceneId) {
+      await requestSceneJoin(currentSceneId);
+    }
+    return true;
+  } catch (error) {
+    console.warn("[NET] Socket reconnect unavailable", error);
+    return false;
+  }
+}
+
+function requestDebugPing() {
+  if (!socket.connected) {
+    debugOverlayState.lastPingMs = null;
+    return;
+  }
+
+  const now = performance.now();
+  if ((now - debugOverlayState.lastPingAt) < 2000) return;
+  debugOverlayState.lastPingAt = now;
+
+  socket.emit("debugPing", { clientSentAt: now }, () => {
+    debugOverlayState.lastPingMs = roundDebugNumber(performance.now() - now, 0);
+  });
+}
+
+async function refreshPacketLossMetric() {
+  if (debugOverlayState.statsPollInFlight) return;
+  if ((performance.now() - debugOverlayState.lastPacketLossAt) < 4000) return;
+
+  debugOverlayState.statsPollInFlight = true;
+
+  try {
+    let lost = 0;
+    let received = 0;
+    let foundAny = false;
+
+    for (const pc of peerConnections.values()) {
+      if (!pc?.getStats) continue;
+      const stats = await pc.getStats();
+
+      for (const report of stats.values()) {
+        if (report.type !== "inbound-rtp" || report.kind !== "audio") continue;
+        if (!Number.isFinite(report.packetsReceived) || !Number.isFinite(report.packetsLost)) continue;
+
+        lost += report.packetsLost;
+        received += report.packetsReceived;
+        foundAny = true;
+      }
+    }
+
+    debugOverlayState.lastPacketLossPercent = foundAny && (lost + received) > 0
+      ? roundDebugNumber((lost / (lost + received)) * 100, 1)
+      : null;
+    debugOverlayState.lastPacketLossAt = performance.now();
+  } catch (error) {
+    console.warn("[DEBUG] Packet loss stats unavailable", error);
+    debugOverlayState.lastPacketLossPercent = null;
+  } finally {
+    debugOverlayState.statsPollInFlight = false;
+  }
+}
+
+function buildDebugMetricsText(scene) {
+  const sceneEngine = scene?.getEngine?.();
+  const fps = roundDebugNumber(sceneEngine?.getFps?.(), 0);
+  const frameMs = roundDebugNumber(sceneEngine?.getDeltaTime?.(), 1);
+  const meshes = scene?.meshes?.length ?? null;
+  const draws = getDebugDrawCallCount(scene);
+  const players = remoteMeshes.size + (selfId ? 1 : 0);
+  const remoteAgeMs = getRemoteUpdateAgeMs();
+  const position = getLocalPositionForDebug(scene);
+
+  const lines = [
+    "DEBUG",
+    `FPS: ${formatDebugMetric(fps)}        Frame: ${formatDebugMetric(frameMs, "ms")}`,
+    `Meshes: ${formatDebugMetric(meshes)}    Draws: ${formatDebugMetric(draws)}`,
+    "",
+    `Ping: ${formatDebugMetric(debugOverlayState.lastPingMs, "ms")}     Socket: ${socket.connected ? "Connected" : "Disconnected"}`,
+    `Players: ${formatDebugMetric(players)}     Remote Age: ${formatDebugMetric(remoteAgeMs, "ms")}`,
+    "",
+    `Voice: ${getVoiceStatusLabel()}      Mic: ${getMicStatusLabel()}`,
+    `Peers: ${formatDebugMetric(peerConnections.size)}       Loss: ${formatDebugMetric(debugOverlayState.lastPacketLossPercent, "%")}`,
+    "",
+    `Mode: ${getCurrentModeLabel(scene)}       Device: ${getClientDeviceLabel()}`,
+    `Room: ${getCurrentRoomLabel(scene)}   Pos: ${position ? `${position.x}, ${position.y}, ${position.z}` : "N/A"}`,
+  ];
+
+  return lines.join("\n");
+}
+
+function emitDebugOverlayUpdate(scene) {
+  const metricsText = buildDebugMetricsText(scene);
+  debugOverlayState.lastMetricsText = metricsText;
+
+  for (const listener of debugOverlayState.listeners) {
+    try {
+      listener(metricsText);
+    } catch (error) {
+      console.warn("[DEBUG] Failed notifying overlay listener", error);
+    }
+  }
+}
+
+function updateDebugOverlay(scene) {
+  if (!debugOverlayState.visible) return;
+
+  requestDebugPing();
+  void refreshPacketLossMetric();
+  emitDebugOverlayUpdate(scene);
+}
+
+function resetDebugPosition(scene) {
+  const didReset = scene?.navigation?.resetPlayerToSpawn?.();
+  if (!didReset) {
+    const spawn = scene?.playerSpawn;
+    if (spawn?.clone && scene?.playerMesh?.position) {
+      scene.playerMesh.position.copyFrom(spawn);
+    } else if (scene?.playerMesh?.position) {
+      scene.playerMesh.position.copyFromFloats(0, 0, 0);
+    } else {
+      console.warn("[DEBUG] Reset position unavailable");
+    }
+  }
+  emitDebugOverlayUpdate(scene);
+  return true;
+}
+
+async function copyDebugMetricsToClipboard(scene) {
+  try {
+    await navigator.clipboard.writeText(debugOverlayState.lastMetricsText || buildDebugMetricsText(scene));
+    return true;
+  } catch (error) {
+    console.warn("[DEBUG] Clipboard copy failed", error);
+    return false;
+  }
+}
+
+function attachDebugOverlay(scene) {
+  scene.debugOverlayControls = {
+    isVisible() {
+      return debugOverlayState.visible;
+    },
+    show() {
+      debugOverlayState.visible = true;
+      updateDebugOverlay(scene);
+      if (!debugOverlayState.intervalId) {
+        debugOverlayState.intervalId = window.setInterval(() => {
+          updateDebugOverlay(scene);
+        }, 500);
+      }
+      return true;
+    },
+    hide() {
+      debugOverlayState.visible = false;
+      if (debugOverlayState.intervalId) {
+        window.clearInterval(debugOverlayState.intervalId);
+        debugOverlayState.intervalId = null;
+      }
+      return false;
+    },
+    toggle() {
+      return debugOverlayState.visible
+        ? scene.debugOverlayControls.hide()
+        : scene.debugOverlayControls.show();
+    },
+    refresh() {
+      updateDebugOverlay(scene);
+    },
+    getText() {
+      const metricsText = debugOverlayState.lastMetricsText || buildDebugMetricsText(scene);
+      debugOverlayState.lastMetricsText = metricsText;
+      return metricsText;
+    },
+    subscribe(listener) {
+      if (typeof listener !== "function") return () => {};
+      debugOverlayState.listeners.add(listener);
+      listener(debugOverlayState.lastMetricsText || buildDebugMetricsText(scene));
+      return () => {
+        debugOverlayState.listeners.delete(listener);
+      };
+    },
+    resetPosition() {
+      return resetDebugPosition(scene);
+    },
+    async reconnectVoice() {
+      const didReconnect = await refreshLocalVoiceStream();
+      if (!didReconnect) {
+        console.warn("[DEBUG] Voice reconnect unavailable");
+      }
+      updateDebugOverlay(scene);
+      return didReconnect;
+    },
+    async reconnectSocket() {
+      const didReconnect = await reconnectSocketToCurrentRoom();
+      if (!didReconnect) {
+        console.warn("[DEBUG] Socket reconnect unavailable");
+      }
+      updateDebugOverlay(scene);
+      return didReconnect;
+    },
+    copyToClipboard() {
+      return copyDebugMetricsToClipboard(scene);
+    },
+  };
 }
 
 function showRuntimeError(message, error = null) {
@@ -419,6 +834,18 @@ let localVoiceAnalyser = null;
 const serverChatMessages = [];
 const sharedSceneState = new Map();
 const sharedSceneStateListeners = new Map();
+const remotePoseUpdateTimes = new Map();
+const debugOverlayState = {
+  visible: false,
+  intervalId: null,
+  statsPollInFlight: false,
+  lastPingMs: null,
+  lastPingAt: 0,
+  lastPacketLossPercent: null,
+  lastPacketLossAt: 0,
+  lastMetricsText: "",
+  listeners: new Set(),
+};
 
 function getScopeStateMap(scope) {
   let scopeMap = sharedSceneState.get(scope);
@@ -2174,6 +2601,7 @@ function removeRemoteNameLabel(id) {
 function removeRemoteMesh(id) {
   pendingRemoteMeshes.delete(id);
   removeRemoteNameLabel(id);
+  remotePoseUpdateTimes.delete(id);
 
   const root = remoteMeshes.get(id);
   if (root) {
@@ -2252,17 +2680,6 @@ async function renegotiatePeerConnection(targetId, pc, reason = "renegotiate") {
   } catch (error) {
     console.error("[VOICE] Failed renegotiation:", targetId, error);
     return false;
-  }
-}
-
-async function syncLocalTracksToExistingPeerConnections() {
-  if (!localStream) return;
-
-  for (const [targetId, pc] of peerConnections.entries()) {
-    const addedAny = addLocalTracksToPeerConnection(pc, targetId);
-    if (!addedAny) continue;
-
-    await renegotiatePeerConnection(targetId, pc, "late-track");
   }
 }
 
@@ -2358,6 +2775,7 @@ socket.on("init", async ({ selfId: id, players, chatMessages, sceneState }) => {
   logConnectedPlayers("init", players);
   replaceServerChatMessages(chatMessages);
   replaceSharedSceneState(sceneState);
+  remotePoseUpdateTimes.clear();
 
   if (!sceneRef) return;
 
@@ -2369,6 +2787,10 @@ remoteMeshes.clear();
 const otherPlayers = Object.values(players || {}).filter(
       (p) => p && p.id && p.id !== selfId
     );
+
+    for (const player of otherPlayers) {
+      registerRemotePoseUpdate(player.id);
+    }
 
     await Promise.all(
       otherPlayers.map((p) => ensureRemoteMesh(sceneRef, p.id))
@@ -2391,6 +2813,7 @@ socket.on("tv-debug-message", (message) => {
 socket.on("playerJoined", async (p) => {
   if (!sceneRef || !p?.id || p.id === selfId) return;
   console.log("[NET] playerJoined:", p.id);
+  registerRemotePoseUpdate(p.id);
 
   await ensureRemoteMesh(sceneRef, p.id);
   updateRemoteAudioVolume(p.id);
@@ -2421,6 +2844,7 @@ socket.on("playerLeft", (id) => {
   removeRemoteMesh(id);
   cleanupRemoteAudio(id);
   removePeerConnection(id);
+  remotePoseUpdateTimes.delete(id);
   logConnectedPlayers("after leave");
 });
 
@@ -2431,6 +2855,7 @@ socket.on("playersUpdate", async (players) => {
 
   for (const [id, p] of Object.entries(players)) {
     if (id === selfId) continue;
+    registerRemotePoseUpdate(id);
 
     let mesh = remoteMeshes.get(id);
 
@@ -2475,6 +2900,7 @@ socket.on("playersUpdate", async (players) => {
     if (!activeIds.has(id)) {
       mesh.dispose?.();
       remoteMeshes.delete(id);
+      remotePoseUpdateTimes.delete(id);
     }
   }
 });
@@ -2581,6 +3007,7 @@ export async function launchApp(options = {}) {
   ensureLocalAvatarCustomization();
 
   const sceneId = typeof options.sceneId === "string" ? options.sceneId.trim() : "";
+  currentSceneId = sceneId || currentSceneId;
 
   try {
     await loadWebRTCConfig();
@@ -2594,15 +3021,12 @@ export async function launchApp(options = {}) {
   }
 
   try {
-    localStream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true
-      }
-    });
-    console.log("[VOICE] Microphone ready");
+    const refreshed = await refreshLocalVoiceStream();
+    if (!refreshed) {
+      throw new Error("Microphone unavailable");
+    }
 
+    console.log("[VOICE] Microphone ready");
     const audioTracks = localStream.getAudioTracks();
     console.log("[VOICE] Audio track count:", audioTracks.length);
 
@@ -2623,9 +3047,6 @@ export async function launchApp(options = {}) {
       track.onended = () => console.warn(`[VOICE] Track ${i} ended`);
     });
 
-    applyMicMode();
-    localVoiceAnalyser = createVoiceAnalyser(localStream);
-    await syncLocalTracksToExistingPeerConnections();
   } catch (err) {
     console.error("[VOICE] Microphone error:", err);
   }
@@ -2644,6 +3065,10 @@ export async function launchApp(options = {}) {
   scene.chatControls = createChatControls();
   scene.sharedStateControls = createSharedStateControls();
   scene.avatarControls = createAvatarControls();
+  scene.metadata = {
+    ...(scene.metadata || {}),
+    sceneId: currentSceneId || scene.metadata?.sceneId || null,
+  };
   for (const callback of scene._sharedStateReadyCallbacks || []) {
     callback(scene.sharedStateControls);
   }
@@ -2657,6 +3082,7 @@ export async function launchApp(options = {}) {
     scene.debugLayer.show();
   }
   setupDebugLayerToggle(scene);
+  attachDebugOverlay(scene);
 
   const SEND_HZ = 15;
   let lastSend = 0;

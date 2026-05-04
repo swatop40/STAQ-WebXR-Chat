@@ -671,6 +671,15 @@ io.on("connection", (socket) => {
     });
   });
 
+  socket.on("debugPing", (payload, ack) => {
+    if (typeof ack === "function") {
+      ack({
+        clientSentAt: payload?.clientSentAt ?? null,
+        serverTime: Date.now(),
+      });
+    }
+  });
+
 //WEBRTC SIGNALING
 
 // When a player sends a WebRTC offer
